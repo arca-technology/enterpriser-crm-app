@@ -3642,6 +3642,130 @@ function openColumnManager() {
   }, 80);
 }
 
+const SECONDARY_COL_PREFS_KEY = "crm_secondary_cols_v1";
+let secondaryColPrefs = (() => {
+  try { return JSON.parse(localStorage.getItem(SECONDARY_COL_PREFS_KEY) || "{}"); }
+  catch (e) { return {}; }
+})();
+
+function secondaryColumnPrefs(scope) {
+  if (!secondaryColPrefs[scope]) secondaryColPrefs[scope] = {};
+  return secondaryColPrefs[scope];
+}
+
+function saveSecondaryColumnPrefs() {
+  localStorage.setItem(SECONDARY_COL_PREFS_KEY, JSON.stringify(secondaryColPrefs));
+}
+
+function orderedColumnDefinitions(definitions, prefs) {
+  const savedOrder = Array.isArray(prefs.__order) ? prefs.__order : [];
+  const byKey = Object.fromEntries(definitions.map((col) => [col.k, col]));
+  return [
+    ...savedOrder.map((key) => byKey[key]).filter(Boolean),
+    ...definitions.filter((col) => !savedOrder.includes(col.k))
+  ];
+}
+
+function openSecondaryColumnManager({ scope, label, definitions, onChange }) {
+  document.getElementById("cols-dd")?.remove();
+  const prefs = secondaryColumnPrefs(scope);
+  let order = orderedColumnDefinitions(definitions, prefs).map((col) => col.k);
+  let listMode = "all";
+  let draggedKey = null;
+  const panel = document.createElement("div");
+  panel.id = "cols-dd";
+  panel.className = "cols-dd";
+  panel.innerHTML = `
+    <div class="column-manager-head"><span>⊞ Colunas · ${esc(label)}</span><button class="column-manager-close" type="button" title="Fechar">×</button></div>
+    <div class="column-manager-controls">
+      <button class="column-manager-preset" type="button">↺ Padrão · ${esc(label)}</button>
+      <select class="column-manager-filter" aria-label="Filtrar colunas">
+        <option value="all">Todos</option><option value="visible">Visíveis</option><option value="hidden">Ocultas</option>
+      </select>
+    </div>
+    <div class="column-manager-list"></div>`;
+  document.body.appendChild(panel);
+  const ordered = () => order.map((key) => definitions.find((col) => col.k === key)).filter(Boolean);
+  const persist = () => {
+    prefs.__order = [...order];
+    secondaryColPrefs[scope] = prefs;
+    saveSecondaryColumnPrefs();
+    onChange();
+  };
+  const draw = () => {
+    const listed = ordered().filter((col) => listMode === "all" || (listMode === "visible" ? prefs[col.k] !== false : prefs[col.k] === false));
+    panel.querySelector(".column-manager-list").innerHTML = listed.map((col) => {
+      const on = prefs[col.k] !== false;
+      return `<div class="column-manager-row${on ? "" : " off"}" data-k="${esc(col.k)}" draggable="true">
+        <span class="column-drag-handle" title="Arrastar para reordenar">⠿</span>
+        <button class="column-switch${on ? " on" : ""}" type="button" role="switch" aria-checked="${on}" title="${on ? "Ocultar" : "Exibir"} ${esc(col.h)}"></button>
+        <span class="column-manager-label">${esc(col.h)}</span>
+      </div>`;
+    }).join("");
+    panel.querySelectorAll(".column-manager-row").forEach((item) => {
+      item.querySelector(".column-switch").addEventListener("click", () => {
+        const visibleCount = definitions.filter((col) => prefs[col.k] !== false).length;
+        const key = item.dataset.k;
+        if (prefs[key] !== false && visibleCount <= 1) return;
+        prefs[key] = prefs[key] === false;
+        persist();
+        draw();
+      });
+      item.addEventListener("dragstart", (event) => {
+        draggedKey = item.dataset.k;
+        item.classList.add("dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", draggedKey);
+      });
+      item.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        if (draggedKey && draggedKey !== item.dataset.k) item.classList.add("drag-over");
+      });
+      item.addEventListener("dragleave", () => item.classList.remove("drag-over"));
+      item.addEventListener("drop", (event) => {
+        event.preventDefault();
+        const targetKey = item.dataset.k;
+        item.classList.remove("drag-over");
+        if (!draggedKey || draggedKey === targetKey) return;
+        const from = order.indexOf(draggedKey);
+        const to = order.indexOf(targetKey);
+        order.splice(from, 1);
+        order.splice(to, 0, draggedKey);
+        draggedKey = null;
+        persist();
+        draw();
+      });
+      item.addEventListener("dragend", () => {
+        draggedKey = null;
+        panel.querySelectorAll(".column-manager-row").forEach((row) => row.classList.remove("dragging", "drag-over"));
+      });
+    });
+  };
+  draw();
+  panel.querySelector(".column-manager-close").addEventListener("click", () => panel.remove());
+  panel.querySelector(".column-manager-filter").addEventListener("change", (event) => {
+    listMode = event.target.value;
+    draw();
+  });
+  panel.querySelector(".column-manager-preset").addEventListener("click", () => {
+    Object.keys(prefs).forEach((key) => delete prefs[key]);
+    order = definitions.map((col) => col.k);
+    listMode = "all";
+    panel.querySelector(".column-manager-filter").value = "all";
+    persist();
+    draw();
+  });
+  setTimeout(() => {
+    const outside = (event) => {
+      if (!panel.contains(event.target) && !event.target.closest(".registration-cols-btn,.tools-cols-btn")) {
+        panel.remove();
+        document.removeEventListener("mousedown", outside);
+      }
+    };
+    document.addEventListener("mousedown", outside);
+  }, 80);
+}
+
 function csvCell(v) {
   const s = String(v ?? "").replace(/<[^>]+>/g, "");
   return `"${s.replace(/"/g, '""')}"`;
@@ -4864,10 +4988,14 @@ function wireRegistrationTable() {
     const key = `c${index}`;
     header.dataset.registrationKey = key;
     header.dataset.registrationLabel = header.textContent.trim();
+    registrationTableRows(table).forEach((row) => {
+      const cell = row.children[index];
+      if (cell) cell.dataset.registrationKey = key;
+    });
     header.title = "Clique para ordenar. Ctrl+clique para filtrar.";
     header.addEventListener("click", (event) => {
       if (event.ctrlKey || event.metaKey) {
-        openRegistrationColumnFilter(header, table, index, key);
+        openRegistrationColumnFilter(header, table, key);
         return;
       }
       const tableState = registrationTableState();
@@ -4877,6 +5005,7 @@ function wireRegistrationTable() {
       applyRegistrationTableState(table);
     });
   });
+  applyRegistrationColumnPreferences(table);
   applyRegistrationTableState(table);
 }
 
@@ -4902,12 +5031,66 @@ function setupRegistrationToolbar(root, table) {
     addButton.title = originalLabel ? `Adicionar ${originalLabel.toLocaleLowerCase("pt-BR")}` : "Adicionar";
     center.appendChild(addButton);
   }
-  right.innerHTML = `<button class="view active" type="button">Tabela</button><button class="view" type="button" disabled>Matriz</button><button class="view" type="button" disabled>Dashboard</button>`;
+  right.innerHTML = `<button class="btn registration-cols-btn" type="button" title="Selecionar colunas">⊞</button><button class="view active" type="button">Tabela</button><button class="view" type="button" disabled>Matriz</button><button class="view" type="button" disabled>Dashboard</button>`;
   toolbar.replaceChildren(left, center, right);
   center.querySelector(".registration-toolbar-search").addEventListener("input", (event) => {
     tableState.search = event.target.value.trim();
     tableState.page = 1;
     applyRegistrationTableState(table);
+  });
+  right.querySelector(".registration-cols-btn").addEventListener("click", (event) => {
+    event.stopPropagation();
+    openRegistrationColumnManager(table);
+  });
+}
+
+function registrationColumnDefinitions(table) {
+  return [...table.querySelectorAll("thead th[data-registration-key]")]
+    .map((header) => ({ k: header.dataset.registrationKey, h: header.dataset.registrationLabel }))
+    .sort((a, b) => Number(a.k.slice(1)) - Number(b.k.slice(1)));
+}
+
+function registrationCell(row, key) {
+  return row.querySelector(`td[data-registration-key="${CSS.escape(key)}"]`);
+}
+
+function applyRegistrationColumnPreferences(table) {
+  const scope = `registrations:${registrationsState.section}`;
+  const prefs = secondaryColumnPrefs(scope);
+  const definitions = registrationColumnDefinitions(table);
+  const ordered = orderedColumnDefinitions(definitions, prefs);
+  const headRow = table.tHead?.rows?.[0];
+  if (!headRow) return;
+  const headerByKey = Object.fromEntries([...headRow.cells].filter((cell) => cell.dataset.registrationKey).map((cell) => [cell.dataset.registrationKey, cell]));
+  const fixedHeaders = [...headRow.cells].filter((cell) => !cell.dataset.registrationKey);
+  ordered.forEach((col) => headRow.appendChild(headerByKey[col.k]));
+  fixedHeaders.forEach((cell) => headRow.appendChild(cell));
+  registrationTableRows(table).forEach((row) => {
+    const cellByKey = Object.fromEntries([...row.cells].filter((cell) => cell.dataset.registrationKey).map((cell) => [cell.dataset.registrationKey, cell]));
+    const fixedCells = [...row.cells].filter((cell) => !cell.dataset.registrationKey);
+    ordered.forEach((col) => { if (cellByKey[col.k]) row.appendChild(cellByKey[col.k]); });
+    fixedCells.forEach((cell) => row.appendChild(cell));
+  });
+  ordered.forEach((col) => {
+    const visible = prefs[col.k] !== false;
+    headerByKey[col.k].hidden = !visible;
+    registrationTableRows(table).forEach((row) => {
+      const cell = registrationCell(row, col.k);
+      if (cell) cell.hidden = !visible;
+    });
+  });
+}
+
+function openRegistrationColumnManager(table) {
+  const definitions = registrationColumnDefinitions(table);
+  openSecondaryColumnManager({
+    scope: `registrations:${registrationsState.section}`,
+    label: REGISTRATION_LABEL[registrationsState.section] || "Cadastros",
+    definitions,
+    onChange: () => {
+      applyRegistrationColumnPreferences(table);
+      applyRegistrationTableState(table);
+    }
   });
 }
 
@@ -4919,13 +5102,11 @@ function applyRegistrationTableState(table) {
   const filteredRows = rows.filter((row) => (!query || row.textContent.toLocaleLowerCase("pt-BR").includes(query))
     && Object.entries(tableState.filters).every(([key, selected]) => {
       if (!selected?.size) return true;
-      const index = Number(key.slice(1));
-      return selected.has(row.children[index]?.textContent.trim() || "—");
+      return selected.has(registrationCell(row, key)?.textContent.trim() || "—");
     }));
   if (tableState.sortKey) {
-    const index = Number(tableState.sortKey.slice(1));
-    const compare = (a, b) => (a.children[index]?.textContent.trim() || "").localeCompare(
-      b.children[index]?.textContent.trim() || "", "pt-BR", { numeric: true, sensitivity: "base" }
+    const compare = (a, b) => (registrationCell(a, tableState.sortKey)?.textContent.trim() || "").localeCompare(
+      registrationCell(b, tableState.sortKey)?.textContent.trim() || "", "pt-BR", { numeric: true, sensitivity: "base" }
     ) * tableState.sortDir;
     rows.sort(compare).forEach((row) => table.tBodies[0].appendChild(row));
     filteredRows.sort(compare);
@@ -4982,10 +5163,10 @@ function renderRegistrationFilterBadges(table) {
   }));
 }
 
-function openRegistrationColumnFilter(header, table, columnIndex, key) {
+function openRegistrationColumnFilter(header, table, key) {
   document.getElementById("registration-filter-dd")?.remove();
   const tableState = registrationTableState();
-  const values = [...new Set(registrationTableRows(table).map((row) => row.children[columnIndex]?.textContent.trim() || "—"))]
+  const values = [...new Set(registrationTableRows(table).map((row) => registrationCell(row, key)?.textContent.trim() || "—"))]
     .sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true, sensitivity: "base" }));
   const selected = new Set(tableState.filters[key] || []);
   const rect = header.getBoundingClientRect();
@@ -5432,7 +5613,11 @@ function currentUserIsAdmin() {
 
 const TOOL_FOLDERS_KEY = "crm_tool_folders";
 const TOOL_EMAILS_KEY = "crm_tool_emails";
-let toolsState = { section: "files" };
+const TOOL_COLUMN_DEFS = {
+  files: [{ k: "name", h: "Nome" }, { k: "description", h: "Descrição" }, { k: "url", h: "Link" }],
+  emails: [{ k: "cnpj", h: "CNPJ" }, { k: "client", h: "Cliente" }, { k: "email", h: "Email" }, { k: "password", h: "Senha" }]
+};
+let toolsState = { section: "files", search: "" };
 
 function readToolRows(key) {
   try {
@@ -5458,6 +5643,7 @@ function toolsDisabledFooter() {
 }
 
 function openToolsModal(section = "files") {
+  if (toolsState.section !== section) toolsState.search = "";
   toolsState.section = section;
   const headerCenter = `<div class="modal-header-tabs" role="tablist" aria-label="Ferramentas">
     <button class="modal-header-tab${section === "files" ? " active" : ""}" data-tools-tab="files" role="tab">Arquivos</button>
@@ -5470,10 +5656,44 @@ function openToolsModal(section = "files") {
   });
   document.querySelectorAll("[data-tools-tab]").forEach((button) => button.addEventListener("click", () => {
     toolsState.section = button.dataset.toolsTab;
+    toolsState.search = "";
     document.querySelectorAll("[data-tools-tab]").forEach((tab) => tab.classList.toggle("active", tab === button));
     renderToolsSection();
   }));
   renderToolsSection();
+}
+
+function visibleToolColumns(section = toolsState.section) {
+  const prefs = secondaryColumnPrefs(`tools:${section}`);
+  return orderedColumnDefinitions(TOOL_COLUMN_DEFS[section], prefs).filter((col) => prefs[col.k] !== false);
+}
+
+function toolsToolbarHtml(count, addTitle, addId) {
+  return `<div class="tools-toolbar">
+    <div class="registration-toolbar-left"><span class="muted">${count} item(ns)</span></div>
+    <div class="registration-toolbar-center"><input class="search registration-toolbar-search tools-search" placeholder="Buscar..." value="${esc(toolsState.search || "")}"><button class="btn primary plus" id="${addId}" title="${esc(addTitle)}">+</button></div>
+    <div class="registration-toolbar-right"><button class="btn tools-cols-btn" type="button" title="Selecionar colunas">⊞</button><button class="view active" type="button">Tabela</button><button class="view" type="button" disabled>Matriz</button><button class="view" type="button" disabled>Dashboard</button></div>
+  </div>`;
+}
+
+function wireToolsToolbar(root) {
+  const input = root.querySelector(".tools-search");
+  input?.addEventListener("input", (event) => {
+    toolsState.search = event.target.value;
+    renderToolsSection();
+    const next = document.querySelector("#tools-root .tools-search");
+    next?.focus();
+    next?.setSelectionRange(next.value.length, next.value.length);
+  });
+  root.querySelector(".tools-cols-btn")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openSecondaryColumnManager({
+      scope: `tools:${toolsState.section}`,
+      label: toolsState.section === "files" ? "Arquivos" : "Emails",
+      definitions: TOOL_COLUMN_DEFS[toolsState.section],
+      onChange: renderToolsSection
+    });
+  });
 }
 
 function renderToolsSection() {
@@ -5484,12 +5704,16 @@ function renderToolsSection() {
 }
 
 function renderToolFolders(root) {
-  const folders = readToolRows(TOOL_FOLDERS_KEY);
+  const allFolders = readToolRows(TOOL_FOLDERS_KEY);
+  const query = toolsState.search.trim().toLocaleLowerCase("pt-BR");
+  const folders = allFolders.filter((folder) => !query || [folder.name, folder.description, folder.url].some((value) => String(value || "").toLocaleLowerCase("pt-BR").includes(query)));
+  const visible = new Set(visibleToolColumns("files").map((col) => col.k));
   const cards = folders.length ? folders.map((folder) => `<article class="tool-folder">
     <div class="tool-folder-icon" aria-hidden="true">📁</div>
     <div class="tool-folder-main">
-      <div class="tool-folder-name">${esc(folder.name)}</div>
-      <div class="tool-folder-description">${esc(folder.description || folder.url || "Pasta")}</div>
+      ${visible.has("name") ? `<div class="tool-folder-name">${esc(folder.name)}</div>` : ""}
+      ${visible.has("description") ? `<div class="tool-folder-description">${esc(folder.description || "Sem descrição")}</div>` : ""}
+      ${visible.has("url") ? `<div class="tool-folder-description">${esc(folder.url || "Sem link")}</div>` : ""}
     </div>
     <div class="tool-folder-actions">
       ${folder.url ? `<button class="tool-icon-btn tool-folder-open" data-id="${esc(folder.id)}" title="Abrir pasta">↗</button>` : ""}
@@ -5497,8 +5721,8 @@ function renderToolFolders(root) {
       <button class="tool-icon-btn tool-folder-delete" data-id="${esc(folder.id)}" title="Excluir pasta">×</button>
     </div>
   </article>`).join("") : '<div class="tool-empty">Nenhuma pasta cadastrada.</div>';
-  root.innerHTML = `<div class="tools-toolbar"><h4>Arquivos</h4><button class="btn primary" id="tool-folder-add">+ Nova pasta</button></div>
-    <div class="tool-folder-grid">${cards}</div>`;
+  root.innerHTML = `${toolsToolbarHtml(folders.length, "Adicionar pasta", "tool-folder-add")}<div class="tool-folder-grid">${cards}</div>`;
+  wireToolsToolbar(root);
   document.getElementById("tool-folder-add").addEventListener("click", () => openToolFolderForm());
   root.querySelectorAll(".tool-folder-open").forEach((button) => button.addEventListener("click", () => openToolFolder(button.dataset.id)));
   root.querySelectorAll(".tool-folder-edit").forEach((button) => button.addEventListener("click", () => openToolFolderForm(button.dataset.id)));
@@ -5558,16 +5782,20 @@ function deleteToolFolder(id) {
 }
 
 function renderToolEmails(root) {
-  const accounts = readToolRows(TOOL_EMAILS_KEY);
+  const allAccounts = readToolRows(TOOL_EMAILS_KEY);
+  const query = toolsState.search.trim().toLocaleLowerCase("pt-BR");
+  const accounts = allAccounts.filter((account) => !query || [account.cnpj, account.client, account.email].some((value) => String(value || "").toLocaleLowerCase("pt-BR").includes(query)));
+  const columns = visibleToolColumns("emails");
   const rows = accounts.length ? accounts.map((account) => `<tr>
-    <td>${esc(account.cnpj || "—")}</td>
-    <td><strong>${esc(account.client || "—")}</strong></td>
-    <td>${esc(account.email || "—")}</td>
-    <td><span class="tool-secret"><span class="tool-secret-value" data-secret-id="${esc(account.id)}">••••••••</span><button class="tool-icon-btn tool-email-reveal" data-id="${esc(account.id)}" title="Mostrar senha">◉</button><button class="tool-icon-btn tool-email-copy" data-id="${esc(account.id)}" title="Copiar senha">⧉</button></span></td>
+    ${columns.map((col) => {
+      if (col.k === "client") return `<td><strong>${esc(account.client || "—")}</strong></td>`;
+      if (col.k === "password") return `<td><span class="tool-secret"><span class="tool-secret-value" data-secret-id="${esc(account.id)}">••••••••</span><button class="tool-icon-btn tool-email-reveal" data-id="${esc(account.id)}" title="Mostrar senha">◉</button><button class="tool-icon-btn tool-email-copy" data-id="${esc(account.id)}" title="Copiar senha">⧉</button></span></td>`;
+      return `<td>${esc(account[col.k] || "—")}</td>`;
+    }).join("")}
     <td><span class="tool-row-actions"><button class="tool-icon-btn tool-email-edit" data-id="${esc(account.id)}" title="Editar">✎</button><button class="tool-icon-btn tool-email-delete" data-id="${esc(account.id)}" title="Excluir">×</button></span></td>
-  </tr>`).join("") : '<tr><td colspan="5" class="tool-empty">Nenhum e-mail cadastrado.</td></tr>';
-  root.innerHTML = `<div class="tools-toolbar"><h4>Emails</h4><button class="btn primary" id="tool-email-add">+ Novo e-mail</button></div>
-    <div class="table-wrap"><table><thead><tr><th>CNPJ</th><th>Cliente</th><th>Email</th><th>Senha</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  </tr>`).join("") : `<tr><td colspan="${columns.length + 1}" class="tool-empty">Nenhum e-mail cadastrado.</td></tr>`;
+  root.innerHTML = `${toolsToolbarHtml(accounts.length, "Adicionar e-mail", "tool-email-add")}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th>${esc(col.h)}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  wireToolsToolbar(root);
   document.getElementById("tool-email-add").addEventListener("click", () => openToolEmailForm());
   root.querySelectorAll(".tool-email-reveal").forEach((button) => button.addEventListener("click", () => toggleToolEmailSecret(button.dataset.id)));
   root.querySelectorAll(".tool-email-copy").forEach((button) => button.addEventListener("click", () => copyToolEmailSecret(button.dataset.id)));

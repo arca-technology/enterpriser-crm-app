@@ -17,14 +17,14 @@
     font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     font-size:13px; display:flex; flex-direction:column; min-height:100vh}
 
-  header{display:flex;align-items:center;gap:20px;background:var(--panel);
+  header{position:relative;display:flex;align-items:center;gap:20px;background:var(--panel);
     border-bottom:1px solid var(--border);padding:0 10px;height:49px;flex:0 0 49px;box-sizing:border-box}
   body.light header{box-shadow:0 1px 5px rgba(26,43,68,.08)}
   .brand-home{min-width:190px;border:0;background:transparent;color:var(--text);cursor:pointer;padding:8px 0;
     text-align:left;font:inherit;font-size:13px;font-weight:800;letter-spacing:.2px;white-space:nowrap}
   .brand-home span{color:var(--blue)}
   .brand-home:hover,.brand-home.active{color:var(--blue)}
-  nav{display:flex;align-items:center;gap:5px;margin:0 auto;overflow-x:auto}
+  nav{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:flex;align-items:center;gap:5px;overflow-x:auto}
   .tab{min-width:104px;height:30px;background:var(--panel2);border:1px solid var(--border);color:var(--muted);cursor:pointer;
     padding:0 14px;border-radius:5px;font-size:11.5px;font-weight:700;letter-spacing:0;text-transform:uppercase;white-space:nowrap}
   .tab:hover{color:var(--text);background:var(--row)}
@@ -360,10 +360,9 @@
   .registrations-modal .registrations-root{flex:1 1 auto}
   .registrations-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;height:38px;flex:0 0 38px;box-sizing:border-box;padding:0 10px;background:var(--panel);border-top:1px solid var(--border);opacity:.38;pointer-events:none}
   .registrations-footer .foot-btn{cursor:default}
-  .tools-root{min-height:0;flex:1 1 auto;padding:14px 16px 18px;overflow:auto}
-  .tools-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+  .tools-root{min-height:0;flex:1 1 auto;padding:0;overflow:hidden;display:flex;flex-direction:column}
   .tools-toolbar h4{margin:0;font-size:12px;text-transform:uppercase;color:var(--muted);letter-spacing:.4px}
-  .tool-folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+  .tool-folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;padding:10px 14px;overflow:auto}
   .tool-folder{display:flex;align-items:flex-start;gap:11px;min-height:76px;padding:13px;border:1px solid var(--border);border-radius:7px;background:var(--panel2)}
   .tool-folder-icon{font-size:23px;line-height:1;flex:0 0 auto}
   .tool-folder-main{min-width:0;flex:1}
@@ -385,11 +384,14 @@
   .registration-filter-badge b{font-size:13px;color:#b9d9ff}
   body.light .registration-filter-badge{border-color:#8bb8ee;background:#e2efff;color:#174f96}
   body.light .registration-filter-badge b{color:#2765ad}
-  .modal-toolbar.registration-toolbar{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,460px) minmax(0,1fr);gap:10px;padding:9px 16px}
+  .modal-toolbar.registration-toolbar,.tools-toolbar{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,500px) minmax(0,1fr);align-items:center;gap:10px;height:40px;box-sizing:border-box;padding:4px 9px;border-bottom:1px solid var(--border2);flex:0 0 40px}
   .registration-toolbar-left,.registration-toolbar-center,.registration-toolbar-right{display:flex;align-items:center;gap:8px;min-width:0}
-  .registration-toolbar-center{justify-content:center}
+  .registration-toolbar-center{position:relative;justify-content:center}
   .registration-toolbar-right{justify-content:flex-end}
-  .registration-toolbar-search{max-width:420px}
+  .registration-toolbar-search{width:431px;max-width:calc(100% - 60px)}
+  .registration-toolbar-center .plus{position:absolute;left:calc(50% + 223.5px)}
+  .registration-cols-btn,.tools-cols-btn{width:38px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:0 0 38px}
+  .tools-table-wrap{flex:1 1 auto;min-height:0;overflow:auto}
   .registrations-root .rowbtn,.product-activity-list .rowbtn{width:32px;height:30px;padding:4px;font-size:16px;display:inline-flex;align-items:center;justify-content:center}
   .registrations-root .rowbtn.edit,.registrations-root .reg-pipeline-edit,.registrations-root .reg-user-edit{color:#3478e5}
   .registrations-root .reg-product-setup{color:#0b9bb2}
@@ -551,10 +553,13 @@
     header{gap:8px;padding:0 8px}
     .brand-home{min-width:auto;font-size:11px}
     .actions{min-width:auto}
-    nav{overflow-x:auto}
+    nav{position:static;transform:none;margin:0 auto;overflow-x:auto}
     .sb-center{gap:8px}
     .sb-center .plus{position:static}
     .search{width:100%;max-width:420px}
+    .registration-toolbar-center{gap:8px}
+    .registration-toolbar-center .plus{position:static}
+    .registration-toolbar-search{width:100%;max-width:420px}
     .tab,.modal-header-tab{min-width:96px;padding-left:10px;padding-right:10px;font-size:11px}
     .home-metrics{grid-template-columns:repeat(3,minmax(130px,1fr))}
     .home-grid{grid-template-columns:1fr}

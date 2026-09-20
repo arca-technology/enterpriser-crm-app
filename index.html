@@ -605,6 +605,13 @@
   .modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:14px 18px;border-top:1px solid var(--border2)}
   .panel-list{padding:16px 18px;color:var(--muted);line-height:1.6}
 
+  .boot-gate{position:fixed;inset:0;z-index:210;background:var(--bg);display:grid;place-items:center;padding:24px}
+  .boot-gate[hidden]{display:none}
+  .boot-panel{display:flex;flex-direction:column;align-items:center;gap:13px;color:var(--muted);font-size:11px;text-transform:uppercase}
+  .boot-progress{position:relative;width:180px;height:2px;overflow:hidden;background:var(--border)}
+  .boot-progress::after{content:"";position:absolute;top:0;bottom:0;width:36%;background:var(--blue);animation:boot-progress 1s ease-in-out infinite}
+  @keyframes boot-progress{from{left:-36%}to{left:100%}}
+  @media(prefers-reduced-motion:reduce){.boot-progress::after{animation:none;left:32%}}
   .auth-gate{position:fixed;inset:0;z-index:200;background:var(--bg);display:grid;place-items:center;padding:24px}
   .auth-gate[hidden]{display:none}
   .auth-panel{width:min(400px,100%);background:var(--panel);border:1px solid var(--border);border-radius:8px;
@@ -631,6 +638,9 @@
 </style>
 </head>
 <body>
+  <div class="boot-gate" id="boot-gate" role="status" aria-live="polite">
+    <div class="boot-panel"><div class="auth-brand">ENTERPRISER <span>• CRM</span></div><div class="boot-progress" aria-hidden="true"></div><span>Carregando</span></div>
+  </div>
   <div class="privacy-gate" id="privacy-gate" hidden>
     <section class="privacy-panel" aria-labelledby="privacy-title">
       <div class="auth-brand">ENTERPRISER <span>• CRM</span></div>
@@ -647,7 +657,7 @@
       <div class="privacy-message" id="privacy-message" role="alert"></div>
     </section>
   </div>
-  <div class="auth-gate" id="auth-gate">
+  <div class="auth-gate" id="auth-gate" hidden>
     <form class="auth-panel" id="login-form">
       <div class="auth-brand">ENTERPRISER <span>• CRM</span></div>
       <h1>Entrar</h1>

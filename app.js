@@ -103,6 +103,7 @@ async function getAccessToken() {
 }
 function showLogin(message = "") {
   closeModal();
+  document.getElementById("boot-gate")?.setAttribute("hidden", "");
   const gate = document.getElementById("auth-gate");
   if (!gate) return;
   gate.hidden = false;
@@ -6234,6 +6235,7 @@ async function init() {
     syncWhatsAppQueue();
     hideLogin();
     render();
+    document.getElementById("boot-gate")?.setAttribute("hidden", "");
   } catch (err) {
     document.getElementById("main").innerHTML =
       `<div class="empty">Falha ao carregar do Supabase.<br><span class="muted">${esc(err.message)}</span><br><br>` +
@@ -6243,6 +6245,8 @@ async function init() {
       conn.classList.remove("live");
       document.getElementById("conn-label").textContent = "Erro de conexão";
     }
+    hideLogin();
+    document.getElementById("boot-gate")?.setAttribute("hidden", "");
   }
 }
 

@@ -1339,9 +1339,19 @@ function tabFilters(tab = state.tab) {
   if (!state.filters[tab]) state.filters[tab] = {};
   return state.filters[tab];
 }
+function orderedColumns(tab, c) {
+  const prefs = colPrefs[tab] || {};
+  const cols = columns(tab, c);
+  const savedOrder = Array.isArray(prefs.__order) ? prefs.__order : [];
+  const byKey = Object.fromEntries(cols.map((col) => [col.k, col]));
+  return [
+    ...savedOrder.map((key) => byKey[key]).filter(Boolean),
+    ...cols.filter((col) => !savedOrder.includes(col.k))
+  ];
+}
 function visibleColumns(tab, c) {
   const prefs = colPrefs[tab] || {};
-  return columns(tab, c).filter((col) => prefs[col.k] !== false);
+  return orderedColumns(tab, c).filter((col) => prefs[col.k] !== false);
 }
 function displayValue(row, col, c) {
   const val = col.fmt ? col.fmt(row[col.k], row, c) : esc(row[col.k] ?? "—");
@@ -3422,7 +3432,7 @@ function renderActiveFilterBadges() {
   const root = document.getElementById("filter-badges");
   if (!root) return;
   const filters = tabFilters();
-  const cols = columns(state.tab, cache);
+  const cols = orderedColumns(state.tab, cache);
   const orderedKeys = cols.map((col) => col.k);
   const active = [
     ...orderedKeys.map((key) => [key, filters[key]]),
@@ -3529,42 +3539,97 @@ function openColumnFilter(th, key) {
 
 function openColumnManager() {
   document.getElementById("cols-dd")?.remove();
-  const cols = columns(state.tab, cache);
+  const baseCols = columns(state.tab, cache);
   const prefs = colPrefs[state.tab] || {};
+  let order = orderedColumns(state.tab, cache).map((col) => col.k);
+  let listMode = "all";
+  let draggedKey = null;
   const panel = document.createElement("div");
   panel.id = "cols-dd";
   panel.className = "cols-dd";
   panel.innerHTML = `
-    <div class="dd-head"><span>Colunas</span><span>${ENTITY_LABEL[state.tab]}</span></div>
-    <div class="dd-list" id="cols-dd-list"></div>
-    <div class="dd-foot">
-      <button class="btn" id="cols-dd-all">Todos</button>
-      <button class="btn" id="cols-dd-reset">Padrão</button>
-    </div>`;
+    <div class="column-manager-head"><span>⊞ Colunas · ${esc(ENTITY_LABEL[state.tab] || state.tab)}</span><button class="column-manager-close" type="button" title="Fechar">×</button></div>
+    <div class="column-manager-controls">
+      <button class="column-manager-preset" id="cols-dd-reset" type="button">↺ Padrão · ${esc(ENTITY_LABEL[state.tab] || state.tab)}</button>
+      <select class="column-manager-filter" id="cols-dd-filter" aria-label="Filtrar colunas">
+        <option value="all">Todos</option>
+        <option value="visible">Visíveis</option>
+        <option value="hidden">Ocultas</option>
+      </select>
+    </div>
+    <div class="column-manager-list" id="cols-dd-list"></div>`;
   document.body.appendChild(panel);
+  const colsInOrder = () => order.map((key) => baseCols.find((col) => col.k === key)).filter(Boolean);
   const draw = () => {
-    panel.querySelector("#cols-dd-list").innerHTML = cols.map((col) => {
+    const listed = colsInOrder().filter((col) => listMode === "all" || (listMode === "visible" ? prefs[col.k] !== false : prefs[col.k] === false));
+    panel.querySelector("#cols-dd-list").innerHTML = listed.map((col) => {
       const on = prefs[col.k] !== false;
-      return `<div class="dd-item${on ? " on" : ""}" data-k="${esc(col.k)}">
-        <span class="dd-check">${on ? "✓" : ""}</span><span>${esc(col.h)}</span>
+      return `<div class="column-manager-row${on ? "" : " off"}" data-k="${esc(col.k)}" draggable="true">
+        <span class="column-drag-handle" title="Arrastar para reordenar">⠿</span>
+        <button class="column-switch${on ? " on" : ""}" type="button" role="switch" aria-checked="${on}" title="${on ? "Ocultar" : "Exibir"} ${esc(col.h)}"></button>
+        <span class="column-manager-label">${esc(col.h)}</span>
       </div>`;
     }).join("");
-    panel.querySelectorAll(".dd-item").forEach((item) => item.addEventListener("click", () => {
-      const visibleCount = cols.filter((col) => prefs[col.k] !== false).length;
-      const k = item.dataset.k;
-      if (prefs[k] !== false && visibleCount <= 1) return;
-      prefs[k] = prefs[k] === false;
-      colPrefs[state.tab] = prefs;
-      saveColPrefs(); draw(); render();
-    }));
+    panel.querySelectorAll(".column-manager-row").forEach((item) => {
+      item.querySelector(".column-switch").addEventListener("click", () => {
+        const visibleCount = baseCols.filter((col) => prefs[col.k] !== false).length;
+        const k = item.dataset.k;
+        if (prefs[k] !== false && visibleCount <= 1) return;
+        prefs[k] = prefs[k] === false;
+        prefs.__order = [...order];
+        colPrefs[state.tab] = prefs;
+        saveColPrefs();
+        draw();
+        render();
+      });
+      item.addEventListener("dragstart", (event) => {
+        draggedKey = item.dataset.k;
+        item.classList.add("dragging");
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", draggedKey);
+      });
+      item.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        if (draggedKey && draggedKey !== item.dataset.k) item.classList.add("drag-over");
+      });
+      item.addEventListener("dragleave", () => item.classList.remove("drag-over"));
+      item.addEventListener("drop", (event) => {
+        event.preventDefault();
+        const targetKey = item.dataset.k;
+        item.classList.remove("drag-over");
+        if (!draggedKey || draggedKey === targetKey) return;
+        const from = order.indexOf(draggedKey);
+        const to = order.indexOf(targetKey);
+        order.splice(from, 1);
+        order.splice(to, 0, draggedKey);
+        prefs.__order = [...order];
+        colPrefs[state.tab] = prefs;
+        saveColPrefs();
+        draggedKey = null;
+        draw();
+        render();
+      });
+      item.addEventListener("dragend", () => {
+        draggedKey = null;
+        panel.querySelectorAll(".column-manager-row").forEach((row) => row.classList.remove("dragging", "drag-over"));
+      });
+    });
   };
   draw();
-  panel.querySelector("#cols-dd-all").addEventListener("click", () => {
-    cols.forEach((col) => { prefs[col.k] = true; });
-    colPrefs[state.tab] = prefs; saveColPrefs(); draw(); render();
+  panel.querySelector(".column-manager-close").addEventListener("click", () => panel.remove());
+  panel.querySelector("#cols-dd-filter").addEventListener("change", (event) => {
+    listMode = event.target.value;
+    draw();
   });
   panel.querySelector("#cols-dd-reset").addEventListener("click", () => {
-    delete colPrefs[state.tab]; saveColPrefs(); panel.remove(); render();
+    Object.keys(prefs).forEach((key) => delete prefs[key]);
+    order = baseCols.map((col) => col.k);
+    colPrefs[state.tab] = prefs;
+    saveColPrefs();
+    listMode = "all";
+    panel.querySelector("#cols-dd-filter").value = "all";
+    draw();
+    render();
   });
   setTimeout(() => {
     const outside = (e) => {

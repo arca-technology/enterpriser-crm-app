@@ -5153,6 +5153,10 @@ function setupRegistrationToolbar(root, table) {
   }
   right.innerHTML = `<button class="btn registration-cols-btn" type="button" title="Selecionar colunas">⊞</button><button class="view active" type="button">Tabela</button><button class="view" type="button" disabled>Matriz</button><button class="view" type="button" disabled>Dashboard</button>`;
   toolbar.replaceChildren(left, center, right);
+  const filterStrip = document.createElement("div");
+  filterStrip.className = "registration-filter-strip";
+  filterStrip.innerHTML = `<div class="registration-filter-badges"></div><button class="filter-clear-all registration-filter-clear-all" type="button" hidden><span aria-hidden="true">×</span> Limpar tudo</button>`;
+  toolbar.after(filterStrip);
   center.querySelector(".registration-toolbar-search").addEventListener("input", (event) => {
     tableState.search = event.target.value.trim();
     tableState.page = 1;
@@ -5265,22 +5269,29 @@ function renderRegistrationPagination(table, total, totalPages) {
 }
 
 function renderRegistrationFilterBadges(table) {
-  const toolbar = document.querySelector("#registrations-root .modal-toolbar");
-  if (!toolbar) return;
-  toolbar.querySelector(".registration-filter-badges")?.remove();
+  const strip = document.querySelector("#registrations-root .registration-filter-strip");
+  const badges = strip?.querySelector(".registration-filter-badges");
+  const clearAll = strip?.querySelector(".registration-filter-clear-all");
+  if (!strip || !badges || !clearAll) return;
   const tableState = registrationTableState();
-  const active = Object.entries(tableState.filters).filter(([, values]) => values?.size);
-  if (!active.length) return;
+  const orderedKeys = registrationColumnDefinitions(table).map((column) => column.k);
+  const active = [
+    ...orderedKeys.map((key) => [key, tableState.filters[key]]),
+    ...Object.entries(tableState.filters).filter(([key]) => !orderedKeys.includes(key))
+  ].filter(([, values]) => values?.size);
   const labels = new Map([...table.querySelectorAll("thead th[data-registration-key]")].map((header) => [header.dataset.registrationKey, header.dataset.registrationLabel]));
-  const badges = document.createElement("div");
-  badges.className = "registration-filter-badges";
   badges.innerHTML = active.map(([key, values]) => `<button class="registration-filter-badge" data-key="${key}" title="Limpar filtro"><span>${esc(labels.get(key) || "Coluna")}: ${esc([...values].join(", "))}</span><b>×</b></button>`).join("");
-  toolbar.querySelector(".registration-toolbar-left")?.appendChild(badges);
   badges.querySelectorAll(".registration-filter-badge").forEach((badge) => badge.addEventListener("click", () => {
     delete tableState.filters[badge.dataset.key];
     tableState.page = 1;
     applyRegistrationTableState(table);
   }));
+  clearAll.hidden = active.length < 2;
+  clearAll.onclick = active.length < 2 ? null : () => {
+    tableState.filters = {};
+    tableState.page = 1;
+    applyRegistrationTableState(table);
+  };
 }
 
 function openRegistrationColumnFilter(header, table, key) {

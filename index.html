@@ -383,11 +383,12 @@
   .registrations-root .product-activity-list td:first-child strong{color:var(--text)}
   .registrations-product{display:grid;gap:3px}
   .registrations-product small{color:var(--muted);font-size:10.5px}
-  .registration-filter-badges{display:flex;align-items:center;gap:6px;flex:1 1 auto;margin:0 14px;min-width:0;overflow-x:auto}
-  .registration-filter-badge{display:inline-flex;align-items:center;gap:6px;max-width:230px;border:1px solid #275a8d;
-    background:#102c4e;color:#8fc5ff;border-radius:5px;padding:5px 7px;font-size:10.5px;font-weight:700;white-space:nowrap;cursor:pointer}
+  .registration-filter-strip{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:20px;height:20px;flex:0 0 20px;padding:1px 8px;background:var(--bg);border-bottom:1px solid var(--border2);box-sizing:border-box}
+  .registration-filter-badges{display:flex;align-items:center;gap:5px;flex:1 1 auto;min-width:0;overflow-x:auto}
+  .registration-filter-badge{display:inline-flex;align-items:center;gap:4px;max-width:220px;height:16px;border:1px solid #275a8d;
+    background:#102c4e;color:#8fc5ff;border-radius:4px;padding:0 5px;font-size:9px;font-weight:700;white-space:nowrap;cursor:pointer}
   .registration-filter-badge span{overflow:hidden;text-overflow:ellipsis}
-  .registration-filter-badge b{font-size:13px;color:#b9d9ff}
+  .registration-filter-badge b{font-size:12px;line-height:1;color:#b9d9ff}
   body.light .registration-filter-badge{border-color:#8bb8ee;background:#e2efff;color:#174f96}
   body.light .registration-filter-badge b{color:#2765ad}
   .modal-toolbar.registration-toolbar,.tools-toolbar,.project-data-toolbar{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,500px) minmax(0,1fr);align-items:center;gap:10px;height:40px;box-sizing:border-box;padding:4px 9px;border-bottom:1px solid var(--border2);flex:0 0 40px}

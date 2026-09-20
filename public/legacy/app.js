@@ -549,6 +549,36 @@ async function syncProductObjectives() {
     else saveDeliveryObjectives(objectives);
   }
 }
+async function syncDeliveryObjectiveDependencies() {
+  if (!cache) return;
+  const templates = loadProductObjectives();
+  const objectives = loadDeliveryObjectives();
+  const tasks = loadProjectTasks();
+  let changed = false;
+  for (const objective of objectives) {
+    const template = templates.find((item) => item.id === objective.source_template_id);
+    if (!template) continue;
+    const dependencyObjectiveIds = normalizeIdList(template.dependency_objective_template_ids)
+      .map((templateId) => objectives.find((item) => item.project_id === objective.project_id && item.source_template_id === templateId)?.id)
+      .filter(Boolean);
+    const dependencyActivityIds = normalizeIdList(template.dependency_activity_template_ids)
+      .flatMap((templateId) => tasks
+        .filter((item) => item.project_id === objective.project_id && item.source_template_id === templateId)
+        .sort(activityOccurrenceSort)
+        .map((item) => item.id));
+    const sameObjectives = JSON.stringify(normalizeIdList(objective.dependency_objective_ids)) === JSON.stringify(dependencyObjectiveIds);
+    const sameActivities = JSON.stringify(normalizeIdList(objective.dependency_activity_ids)) === JSON.stringify(dependencyActivityIds);
+    if (sameObjectives && sameActivities) continue;
+    const updates = { dependency_objective_ids: dependencyObjectiveIds, dependency_activity_ids: dependencyActivityIds };
+    Object.assign(objective, updates, { updated_at: new Date().toISOString() });
+    if (isLive()) await updateRow("deliveryObjectives", objective.id, updates);
+    changed = true;
+  }
+  if (changed) {
+    if (isLive()) cache.deliveryObjectives = objectives;
+    else saveDeliveryObjectives(objectives);
+  }
+}
 async function syncProductGoals() {
   if (!cache) return;
   const templates = loadProductGoals();
@@ -717,6 +747,7 @@ async function syncProductActivities() {
     if (isLive()) cache.activityRecords = tasks;
     else saveProjectTasks(tasks);
   }
+  await syncDeliveryObjectiveDependencies();
   await syncDeliveryGoalDependencies();
 }
 function activityOccurrenceSort(a, b) {
@@ -1915,9 +1946,15 @@ function renderProductObjectives() {
   const rows = objectives.map((item) => {
     const owner = cache.userById[item.default_owner_id]?.full_name || cache.userById[item.default_owner_id]?.name || "—";
     const activityCount = activities.filter((activity) => activity.objective_template_id === item.id).length;
+    const dependencyObjectives = normalizeIdList(item.dependency_objective_template_ids)
+      .map((id) => objectives.find((objective) => objective.id === id)?.name).filter(Boolean);
+    const dependencyActivities = normalizeIdList(item.dependency_activity_template_ids)
+      .map((id) => activities.find((activity) => activity.id === id)).filter(Boolean).map(activityDisplayName);
+    const dependencies = [...dependencyObjectives, ...dependencyActivities].join(", ") || "—";
     return `<tr>
       <td><strong>${esc(item.name)}</strong></td>
       <td>${esc(item.completion_criteria || "—")}</td>
+      <td>${esc(dependencies)}</td>
       <td>${esc(owner)}</td>
       <td>${item.target_days == null || item.target_days === "" ? "—" : `${esc(item.target_days)} dia(s)`}</td>
       <td>${activityCount}</td>
@@ -1929,8 +1966,8 @@ function renderProductObjectives() {
   }).join("");
   root.innerHTML = `<div class="modal-toolbar"><span class="muted">${objectives.length} objetivo(s) do produto</span><button class="btn primary" id="po-new">+ Objetivo</button></div>
     <div class="product-activity-list"><table><thead><tr>
-      <th>Objetivo</th><th>Critério de conclusão</th><th>Responsável padrão</th><th>Prazo sugerido</th><th>Tarefas</th><th></th>
-    </tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Nenhum objetivo cadastrado para este produto.</td></tr>'}</tbody></table></div>`;
+      <th>Objetivo</th><th>Critério de conclusão</th><th>Depende de</th><th>Responsável padrão</th><th>Prazo sugerido</th><th>Tarefas</th><th></th>
+    </tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">Nenhum objetivo cadastrado para este produto.</td></tr>'}</tbody></table></div>`;
   document.getElementById("po-new").addEventListener("click", () => openProductObjectiveDrawer());
   document.querySelectorAll(".po-edit").forEach((button) => button.addEventListener("click", () => openProductObjectiveDrawer(button.dataset.id)));
   document.querySelectorAll(".po-delete").forEach((button) => button.addEventListener("click", () => deleteProductObjective(button.dataset.id)));
@@ -1941,6 +1978,12 @@ function openProductObjectiveDrawer(editId = null) {
   productActivityState.objectiveEditId = editId;
   const objectives = loadProductObjectives().filter((item) => item.product_id === productActivityState.productId);
   const current = objectives.find((item) => item.id === editId) || {};
+  const objectiveDependencyOptions = objectives
+    .filter((item) => item.id !== editId)
+    .map((item) => ({ value: item.id, label: item.name }));
+  const activityDependencyOptions = loadProductActivities()
+    .filter((item) => item.product_id === productActivityState.productId)
+    .map((item) => ({ value: item.id, label: activityDisplayName(item) }));
   const overlay = document.createElement("div");
   overlay.id = "product-activity-drawer-overlay";
   overlay.className = "activity-form-overlay";
@@ -1951,6 +1994,8 @@ function openProductObjectiveDrawer(editId = null) {
       <div class="field"><label>Critério de conclusão</label><textarea id="po-criteria" rows="5" placeholder="Como saberemos que este objetivo foi alcançado?">${esc(current.completion_criteria || "")}</textarea></div>
       <div class="field"><label>Responsável padrão</label><select id="po-owner">${userOptions(current.default_owner_id || "")}</select></div>
       <div class="field"><label>Prazo sugerido (dias)</label><input id="po-target-days" type="number" min="0" step="1" value="${esc(current.target_days ?? "")}" placeholder="Ex.: 30"></div>
+      <div class="field"><label>Depende de objetivos</label>${multiPickerHtml("po-objective-dependencies", objectiveDependencyOptions, new Set(normalizeIdList(current.dependency_objective_template_ids)), "Selecionar objetivos")}</div>
+      <div class="field"><label>Depende de tarefas</label>${multiPickerHtml("po-activity-dependencies", activityDependencyOptions, new Set(normalizeIdList(current.dependency_activity_template_ids)), "Selecionar tarefas")}</div>
     </div>
     <div class="modal-foot"><button class="btn" id="po-cancel">Cancelar</button><button class="btn primary" id="po-save">${current.id ? "Salvar" : "Criar"}</button></div>
   </aside>`;
@@ -1959,7 +2004,22 @@ function openProductObjectiveDrawer(editId = null) {
   document.getElementById("po-close").addEventListener("click", closeProductActivityDrawer);
   document.getElementById("po-cancel").addEventListener("click", closeProductActivityDrawer);
   document.getElementById("po-save").addEventListener("click", saveProductObjective);
+  wireMultiPicker("po-objective-dependencies");
+  wireMultiPicker("po-activity-dependencies");
   document.getElementById("po-name")?.focus();
+}
+
+function createsObjectiveDependencyCycle(rows, currentId, dependencyIds) {
+  const reachesCurrent = (candidateId, path = new Set()) => {
+    if (!candidateId) return false;
+    if (candidateId === currentId) return true;
+    if (path.has(candidateId)) return false;
+    const candidate = rows.find((item) => item.id === candidateId);
+    const nextPath = new Set(path).add(candidateId);
+    return normalizeIdList(candidate?.dependency_objective_template_ids)
+      .some((nextId) => reachesCurrent(nextId, nextPath));
+  };
+  return dependencyIds.some((dependencyId) => reachesCurrent(dependencyId));
 }
 
 async function saveProductObjective() {
@@ -1967,6 +2027,13 @@ async function saveProductObjective() {
   if (!name) { toast("Informe o objetivo.", true); return; }
   const rows = loadProductObjectives();
   const current = rows.find((item) => item.id === productActivityState.objectiveEditId);
+  const recordId = current?.id || crypto.randomUUID();
+  const dependencyObjectiveIds = multiPickerValues("po-objective-dependencies");
+  const dependencyActivityIds = multiPickerValues("po-activity-dependencies");
+  if (createsObjectiveDependencyCycle(rows, recordId, dependencyObjectiveIds)) {
+    toast("Essa dependência criaria um ciclo entre os objetivos.", true);
+    return;
+  }
   const productRows = rows.filter((item) => item.product_id === productActivityState.productId);
   const targetValue = document.getElementById("po-target-days").value;
   const body = {
@@ -1974,6 +2041,8 @@ async function saveProductObjective() {
     name,
     completion_criteria: document.getElementById("po-criteria").value.trim(),
     default_owner_id: document.getElementById("po-owner").value || null,
+    dependency_objective_template_ids: dependencyObjectiveIds,
+    dependency_activity_template_ids: dependencyActivityIds,
     target_days: targetValue === "" ? null : Number(targetValue),
     sort_order: current?.sort_order ?? (Math.max(-1, ...productRows.map((item) => Number(item.sort_order || 0))) + 1),
     updated_at: new Date().toISOString()
@@ -1983,7 +2052,7 @@ async function saveProductObjective() {
       const saved = isLive() ? await updateRow("productObjectives", current.id, body) : { ...current, ...body };
       Object.assign(current, saved);
     } else {
-      const draft = { id: crypto.randomUUID(), ...body, created_at: new Date().toISOString() };
+      const draft = { id: recordId, ...body, created_at: new Date().toISOString() };
       rows.push(isLive() ? await createRow("productObjectives", draft) : draft);
     }
     if (isLive()) cache.productObjectives = rows;
@@ -2762,18 +2831,41 @@ function renderDeliveryObjectives(projectId, tasks) {
     const linked = tasks.filter((task) => task.objective_id === objective.id);
     const done = linked.filter((task) => task.status === "done").length;
     const progress = linked.length ? Math.round((done / linked.length) * 100) : 0;
+    const dependencyState = deliveryObjectiveDependencyState(objective);
+    const dependencyLabel = deliveryObjectiveDependencyLabel(objective);
     return `<tr data-objective-id="${esc(objective.id)}">
       <td><strong>${esc(objective.name)}</strong></td>
       <td>${esc(objective.completion_criteria || "—")}</td>
       <td>${done}/${linked.length} · ${progress}%</td>
+      <td>${esc(dependencyLabel)}${dependencyState.blocked ? '<div class="muted">Aguardando dependências</div>' : ""}</td>
       <td><select class="objective-control delivery-objective-owner">${userOptions(objective.owner_id || "")}</select></td>
       <td><input class="objective-control delivery-objective-due" type="date" value="${esc(objective.due_date || "")}"></td>
       <td><select class="objective-control delivery-objective-status">${taskStatusOptions(objective.status || "todo")}</select></td>
     </tr>`;
   }).join("");
   return `<div class="task-table-wrap"><table><thead><tr>
-    <th>Objetivo</th><th>Critério de conclusão</th><th>Progresso das tarefas</th><th>Responsável</th><th>Prazo</th><th>Status</th>
-  </tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Esta entrega ainda não possui objetivos.</td></tr>'}</tbody></table></div>`;
+    <th>Objetivo</th><th>Critério de conclusão</th><th>Progresso das tarefas</th><th>Depende de</th><th>Responsável</th><th>Prazo</th><th>Status</th>
+  </tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">Esta entrega ainda não possui objetivos.</td></tr>'}</tbody></table></div>`;
+}
+
+function deliveryObjectiveDependencyState(objective) {
+  const objectives = loadDeliveryObjectives();
+  const tasks = loadProjectTasks();
+  const dependencyObjectives = normalizeIdList(objective.dependency_objective_ids)
+    .map((id) => objectives.find((item) => item.id === id)).filter(Boolean);
+  const dependencyActivities = normalizeIdList(objective.dependency_activity_ids)
+    .map((id) => tasks.find((item) => item.id === id)).filter(Boolean);
+  const pendingObjectives = dependencyObjectives.filter((item) => item.status !== "done");
+  const pendingActivities = dependencyActivities.filter((item) => item.status !== "done");
+  return { dependencyObjectives, dependencyActivities, pendingObjectives, pendingActivities, blocked: Boolean(pendingObjectives.length || pendingActivities.length) };
+}
+
+function deliveryObjectiveDependencyLabel(objective) {
+  const state = deliveryObjectiveDependencyState(objective);
+  return [
+    ...state.dependencyObjectives.map((item) => item.name),
+    ...state.dependencyActivities.map(activityDisplayName)
+  ].join(", ") || "—";
 }
 
 function deliveryGoalReached(goal, value = Number(goal.current_value || 0)) {
@@ -2902,12 +2994,28 @@ async function updateDeliveryObjective(objectiveId, patch) {
   const rows = loadDeliveryObjectives();
   const objective = rows.find((item) => item.id === objectiveId);
   if (!objective) return;
+  if (patch.status && patch.status !== "todo") {
+    const dependencyState = deliveryObjectiveDependencyState(objective);
+    if (dependencyState.blocked) {
+      const pending = dependencyState.pendingObjectives[0]?.name || activityDisplayName(dependencyState.pendingActivities[0]);
+      toast(`Conclua "${pending}" antes de avançar este objetivo.`, true);
+      return false;
+    }
+  }
+  if (patch.status && patch.status !== "done" && objective.status === "done") {
+    const activeDependent = rows.find((item) => normalizeIdList(item.dependency_objective_ids).includes(objective.id) && item.status !== "todo");
+    if (activeDependent) {
+      toast(`Volte "${activeDependent.name}" para A fazer antes de reabrir este objetivo.`, true);
+      return false;
+    }
+  }
   const changes = { ...patch, updated_at: new Date().toISOString() };
   if (isLive()) await updateRow("deliveryObjectives", objectiveId, changes);
   Object.assign(objective, changes);
   if (isLive()) cache.deliveryObjectives = rows;
   else saveDeliveryObjectives(rows);
   refreshActivityCache();
+  return true;
 }
 
 function wireDeliveryObjectives(projectId) {
@@ -4598,8 +4706,15 @@ function renderRegistrationsSection() {
     root.innerHTML = registrationTemplateTable("meta", items.length, "Meta", "<th>Produto</th><th>Indicador</th><th>Valor-alvo</th><th>Depende de</th><th>Responsável padrão</th>", rows, 7);
   } else {
     const items = loadProductObjectives();
-    const rows = items.map((item) => `<tr><td><strong>${esc(item.name || "—")}</strong></td><td>${esc(registrationProductName(item.product_id))}</td><td>${esc(item.completion_criteria || "—")}</td><td>${item.target_days == null ? "—" : `${esc(item.target_days)} dia(s)`}</td><td>${esc(cache.userById[item.default_owner_id]?.full_name || cache.userById[item.default_owner_id]?.name || "—")}</td><td class="act"><button class="rowbtn edit reg-template-edit" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Editar objetivo">✎</button></td></tr>`).join("");
-    root.innerHTML = registrationTemplateTable("objetivo", items.length, "Objetivo", "<th>Produto</th><th>Critério de conclusão</th><th>Prazo sugerido</th><th>Responsável padrão</th>", rows, 6);
+    const activities = loadProductActivities();
+    const rows = items.map((item) => {
+      const dependencies = [
+        ...normalizeIdList(item.dependency_objective_template_ids).map((id) => items.find((objective) => objective.id === id)?.name),
+        ...normalizeIdList(item.dependency_activity_template_ids).map((id) => activities.find((activity) => activity.id === id)).filter(Boolean).map(activityDisplayName)
+      ].filter(Boolean).join(", ") || "—";
+      return `<tr><td><strong>${esc(item.name || "—")}</strong></td><td>${esc(registrationProductName(item.product_id))}</td><td>${esc(item.completion_criteria || "—")}</td><td>${esc(dependencies)}</td><td>${item.target_days == null ? "—" : `${esc(item.target_days)} dia(s)`}</td><td>${esc(cache.userById[item.default_owner_id]?.full_name || cache.userById[item.default_owner_id]?.name || "—")}</td><td class="act"><button class="rowbtn edit reg-template-edit" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Editar objetivo">✎</button></td></tr>`;
+    }).join("");
+    root.innerHTML = registrationTemplateTable("objetivo", items.length, "Objetivo", "<th>Produto</th><th>Critério de conclusão</th><th>Depende de</th><th>Prazo sugerido</th><th>Responsável padrão</th>", rows, 7);
   }
   document.getElementById("registration-add")?.addEventListener("click", () => {
     if (section === "activities") {

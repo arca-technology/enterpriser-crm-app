@@ -308,10 +308,11 @@
 
   footer{display:flex;align-items:center;justify-content:space-between;height:39px;flex:0 0 auto;
     background:var(--panel);border-top:1px solid var(--border);padding:0 16px;font-size:11.5px;color:var(--muted2)}
-  .foot-right{display:flex;gap:8px}
+  .foot-right{display:flex;align-items:center;gap:8px}
   .foot-btn{background:var(--panel2);border:1px solid var(--border);color:var(--muted);
-    padding:5px 13px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;letter-spacing:.2px}
+    padding:5px 13px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:.4px;text-transform:uppercase}
   .foot-btn:hover{color:var(--text);background:var(--row)}
+  .foot-btn[hidden]{display:none}
 
   .overlay{position:fixed;inset:0;background:var(--overlay);display:flex;align-items:center;
     justify-content:center;z-index:50;padding:20px}
@@ -328,10 +329,17 @@
   .modal-header-tab{border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);padding:0 4px;font:inherit;font-size:11px;font-weight:700;letter-spacing:0;text-transform:uppercase;cursor:pointer}
   .modal-header-tab:hover{color:var(--text)}
   .modal-header-tab.active{color:var(--blue);border-bottom-color:var(--blue)}
+  .registrations-modal .modal-header-tab{font-size:12.5px;font-weight:600;letter-spacing:.4px}
+  .registration-brand{display:flex;align-items:center;gap:10px;white-space:nowrap;font-size:13px;font-weight:800}
+  .registration-brand b{color:var(--blue);font:inherit}
+  .registration-brand em{padding-left:10px;border-left:1px solid var(--border);color:var(--muted);font-size:12.5px;font-style:normal;font-weight:600}
   .modal-header-actions{display:flex;align-items:center;gap:8px}
   .modal-header-add{width:28px;height:28px;padding:0;font-size:18px;line-height:1}
   .modal.full .help-content,.modal.full .full-body{flex:1 1 auto;overflow:auto;display:flex;flex-direction:column}
   .registrations-root{min-height:0}
+  .registrations-modal .registrations-root{flex:1 1 auto}
+  .registrations-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;height:39px;flex:0 0 39px;padding:0 16px;background:var(--panel);border-top:1px solid var(--border);opacity:.38;pointer-events:none}
+  .registrations-footer .foot-btn{cursor:default}
   .registrations-root .product-activity-list td:first-child strong{color:var(--text)}
   .registrations-product{display:grid;gap:3px}
   .registrations-product small{color:var(--muted);font-size:10.5px}

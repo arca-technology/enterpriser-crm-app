@@ -3858,6 +3858,7 @@ async function createDealFromSelectedConversations() {
 function render() {
   if (!cache) return;
   refreshActivityCache();
+  document.querySelector('[data-action="log"]')?.toggleAttribute("hidden", !currentUserIsAdmin());
   const hasConversationSelection = state.selectedConversations.size > 0;
   const isHome = state.tab === "home";
   document.querySelector(".subbar")?.classList.toggle("home-hidden", isHome);
@@ -3944,9 +3945,10 @@ function closeModal() {
 function shell(title, inner, opts = {}) {
   const cls = "modal" + (opts.cls ? ` ${opts.cls}` : "");
   const overlayCls = opts.cls?.split(/\s+/).includes("full") ? "overlay full-overlay" : "overlay";
+  const titleHtml = opts.titleHtml || esc(title);
   document.getElementById("modal-root").innerHTML =
     `<div class="${overlayCls}" id="ov"><div class="${cls}">
-      <h3><span class="modal-title">${esc(title)}</span>${opts.headerCenter || ""}<span class="modal-header-actions">${opts.headerActions || ""}<button class="modal-close-x" id="shell-close" title="Fechar (Esc)">✕</button></span></h3>
+      <h3><span class="modal-title">${titleHtml}</span>${opts.headerCenter || ""}<span class="modal-header-actions">${opts.headerActions || ""}<button class="modal-close-x" id="shell-close" title="Fechar (Esc)">✕</button></span></h3>
       ${inner}
     </div></div>`;
   modalCloseOverride = typeof opts.onClose === "function" ? opts.onClose : null;
@@ -4619,7 +4621,18 @@ function openRegistrationsModal(section = "products") {
   const headerCenter = `<div class="modal-header-tabs" role="tablist" aria-label="Cadastros">
     ${Object.entries(REGISTRATION_LABEL).map(([id, label]) => `<button class="modal-header-tab${id === section ? " active" : ""}" data-registration-tab="${id}" role="tab">${label}</button>`).join("")}
   </div>`;
-  shell("Cadastros", `<div id="registrations-root" class="full-body registrations-root"></div>`, { cls: "full", headerCenter });
+  const disabledFooter = `<div class="registrations-footer" aria-disabled="true">
+    ${currentUserIsAdmin() ? '<button class="foot-btn" disabled>LOG</button>' : ""}
+    <button class="foot-btn" disabled>AJUDA</button>
+    <button class="foot-btn" disabled>CADASTROS</button>
+    <button class="foot-btn" disabled>ARQUIVOS</button>
+    <button class="foot-btn" disabled>ATUALIZAÇÕES</button>
+  </div>`;
+  shell("Cadastros", `<div id="registrations-root" class="full-body registrations-root"></div>${disabledFooter}`, {
+    cls: "full registrations-modal",
+    headerCenter,
+    titleHtml: '<span class="registration-brand">ENTERPRISER <b>• CRM</b><em>Cadastros</em></span>'
+  });
   document.querySelectorAll("[data-registration-tab]").forEach((button) => button.addEventListener("click", () => {
     document.getElementById("registration-filter-dd")?.remove();
     registrationsState.section = button.dataset.registrationTab;
@@ -5330,10 +5343,67 @@ async function disconnectGoogleAccount() {
   toast("Conta Google desconectada desta extensão.");
 }
 
+function currentUserIsAdmin() {
+  return !isLive() || currentProfile?.role === "admin";
+}
+
+function openFilesModal() {
+  const canExport = state.tab !== "home";
+  sidePanel("Arquivos", `<div class="panel-list">
+    <button class="btn" id="footer-csv-active"${canExport ? "" : " disabled"}>CSV · Colunas ativas</button>
+    <button class="btn" id="footer-csv-all"${canExport ? "" : " disabled"}>CSV · Todas as colunas</button>
+    <button class="btn" id="footer-import-whatsapp">Importar conversa · TXT/ZIP</button>
+  </div>`, { closeOnOverlay: true });
+  document.getElementById("footer-csv-active")?.addEventListener("click", () => { closeModal(); exportTableCSV(true); });
+  document.getElementById("footer-csv-all")?.addEventListener("click", () => { closeModal(); exportTableCSV(false); });
+  document.getElementById("footer-import-whatsapp")?.addEventListener("click", () => {
+    closeModal();
+    document.getElementById("import-file").click();
+  });
+}
+
+function openUpdatesModal() {
+  sidePanel("Atualizações", `<div class="panel-list">
+    <div><strong>Versão web 0.1.0</strong></div>
+    <div class="muted">Dependências entre metas, objetivos e tarefas; ajustes de modais; integração por usuário; e navegação de Cadastros revisada.</div>
+  </div>`, { closeOnOverlay: true });
+}
+
+function openAdminLog() {
+  if (!currentUserIsAdmin()) { toast("LOG disponível apenas para administradores.", true); return; }
+  const sources = {
+    companies: "Empresa",
+    contacts: "Contato",
+    deals: "Negociação",
+    projects: "Entrega",
+    activityRecords: "Tarefa",
+    goals: "Meta",
+    objectives: "Objetivo",
+    products: "Produto",
+    users: "Usuário"
+  };
+  const rows = Object.entries(sources).flatMap(([key, type]) =>
+    (cache[key] || []).map((item) => ({
+      type,
+      name: item.name || item.title || item.trade_name || item.legal_name || item.full_name || item.contact_name || item.id || "Registro",
+      at: item.updated_at || item.created_at || ""
+    }))
+  ).filter((item) => item.at).sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 100);
+  const body = rows.length
+    ? rows.map((item) => `<tr><td>${esc(item.type)}</td><td><strong>${esc(item.name)}</strong></td><td>${esc(new Date(item.at).toLocaleString("pt-BR"))}</td></tr>`).join("")
+    : '<tr><td colspan="3" class="empty">Nenhuma alteração registrada.</td></tr>';
+  shell("Log · Alterações recentes", `<div class="table-wrap"><table><thead><tr><th>Tipo</th><th>Registro</th><th>Data</th></tr></thead><tbody>${body}</tbody></table></div>
+    <div class="modal-foot"><button class="btn" id="log-close">Fechar</button></div>`, { cls: "wide" });
+  document.getElementById("log-close").addEventListener("click", closeModal);
+}
+
 function handleAction(action) {
   if (action === "theme") { setTheme(!document.body.classList.contains("light")); return; }
   if (action === "settings") { openSettings(); return; }
   if (action === "help") { openHelpModal(); return; }
+  if (action === "log") { openAdminLog(); return; }
+  if (action === "files") { openFilesModal(); return; }
+  if (action === "updates") { openUpdatesModal(); return; }
   if (action === "pipeline") { openPipelinesModal(); return; }
   if (action === "registrations") { openRegistrationsModal(); return; }
   if (action === "users") { openUsersModal(); return; }

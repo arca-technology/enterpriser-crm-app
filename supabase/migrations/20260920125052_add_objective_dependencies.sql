@@ -1,4 +1,4 @@
-+alter table public.product_objective_templates
+alter table public.product_objective_templates
   add column if not exists dependency_objective_template_ids uuid[] not null default '{}',
   add column if not exists dependency_activity_template_ids uuid[] not null default '{}';
 

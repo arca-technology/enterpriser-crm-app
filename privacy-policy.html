@@ -13,7 +13,7 @@
 </style>
 </head>
 <body>
-<header><div><h1>Política de Privacidade</h1><div>ENTERPRISER • CRM</div><div class="meta">Última atualização: 19 de setembro de 2026</div></div></header>
+<header><div><h1>Política de Privacidade</h1><div>ENTERPRISER • CRM</div><div class="meta">Última atualização: 20 de setembro de 2026</div></div></header>
 <main>
   <p class="notice">Esta política explica como a versão web do ENTERPRISER • CRM coleta, usa, processa, armazena e compartilha dados. A captura automática de conversas e Google Contatos pertence à extensão Chrome e não é executada por esta versão web.</p>
 
@@ -27,9 +27,9 @@
   <ul>
     <li><strong>Conta e autenticação:</strong> nome, e-mail, telefone, perfil de acesso, função, cargo, status da conta e tokens de sessão. A senha é processada pelo Supabase Auth e não é armazenada em texto legível pelo web app.</li>
     <li><strong>Dados de CRM informados pelo usuário:</strong> nomes, e-mails, telefones, CPF, data de nascimento, cargo, redes sociais, empresas, CNPJ, endereços, anotações, negociações, valores, produtos, entregas, tarefas, metas, objetivos e responsáveis.</li>
-    <li><strong>Arquivos importados:</strong> conteúdo, participantes, telefones, nomes, datas e horários presentes em arquivos de conversa escolhidos pelo usuário.</li>
     <li><strong>Conversas importadas manualmente:</strong> conteúdo, participantes, telefones, nomes, datas e horários presentes em arquivos de conversa escolhidos pelo usuário.</li>
-    <li><strong>Dados técnicos locais:</strong> preferências de tema e colunas, configuração de conexão, sessão autenticada e registro da aceitação desta política.</li>
+    <li><strong>Ferramentas locais:</strong> links de pastas e, quando o usuário optar por cadastrá-las, credenciais de e-mail de clientes.</li>
+    <li><strong>Dados técnicos locais:</strong> preferências de tema e colunas, configuração de conexão e sessão autenticada.</li>
   </ul>
   <p>O web app não monitora navegação, não injeta scripts em outros sites e não lê páginas do Reddit, WhatsApp ou Google.</p>
 
@@ -38,7 +38,7 @@
 
   <h2>5. Armazenamento e processamento</h2>
   <ul>
-    <li><strong>No navegador:</strong> preferências, sessão, configurações e conversas importadas podem ser guardadas em <code>localStorage</code>. Essas informações permanecem no navegador até serem apagadas pelo usuário.</li>
+    <li><strong>No navegador:</strong> preferências, sessão, configurações, conversas importadas, atalhos de pastas e credenciais cadastradas em Ferramentas podem ser guardadas em <code>localStorage</code>. Essas informações permanecem neste navegador até serem apagadas pelo usuário. Credenciais de e-mail ficam recuperáveis localmente e devem ser usadas somente em dispositivo confiável.</li>
     <li><strong>No Supabase:</strong> cadastros e registros operacionais do CRM, além da autenticação, são armazenados na infraestrutura do Supabase usando conexão HTTPS, autenticação e políticas de acesso no banco.</li>
     <li><strong>Consulta de CNPJ:</strong> quando o usuário solicita o preenchimento automático, o número do CNPJ é enviado por HTTPS à API pública open.cnpja.com e a resposta é usada para completar o cadastro da empresa.</li>
   </ul>
@@ -60,16 +60,16 @@
   <p>Dados locais permanecem até a limpeza dos dados do navegador. Dados do CRM permanecem no Supabase enquanto a conta da organização estiver ativa ou até serem excluídos por um administrador. Ao sair, a sessão local é encerrada. O titular pode solicitar acesso, correção ou exclusão pelo e-mail de contato informado nesta política.</p>
 
   <h2>9. Controles e escolhas do usuário</h2>
-  <p>O usuário pode não aceitar o tratamento e, nesse caso, o CRM web não é iniciado. Também pode cancelar importações, limpar dados locais do navegador, encerrar a sessão e solicitar correção ou exclusão dos dados. A organização pode inativar ou excluir acessos de colaboradores.</p>
+  <p>O usuário pode cancelar importações, limpar dados locais do navegador, encerrar a sessão e solicitar correção ou exclusão dos dados. A organização pode inativar ou excluir acessos de colaboradores. O consentimento explícito para captura automática permanece restrito à extensão Chrome.</p>
 
   <h2>10. Segurança</h2>
-  <p>As transmissões externas usam HTTPS. O banco exige autenticação e aplica políticas de acesso. Senhas são tratadas pelo serviço de autenticação e não ficam disponíveis em texto legível. Nenhum método de armazenamento é absolutamente infalível, mas são adotadas medidas compatíveis com a natureza dos dados tratados.</p>
+  <p>As transmissões externas usam HTTPS. O banco exige autenticação e aplica políticas de acesso. Senhas de login são tratadas pelo Supabase Auth e não ficam disponíveis em texto legível pelo web app. Credenciais inseridas manualmente em Ferramentas → E-mails ficam recuperáveis no armazenamento local deste navegador e não devem ser usadas em computador compartilhado. Nenhum método de armazenamento é absolutamente infalível, mas são adotadas medidas compatíveis com a natureza dos dados tratados.</p>
 
   <h2>11. Crianças e adolescentes</h2>
   <p>O produto é destinado ao uso empresarial e não é direcionado a crianças. Não coletamos intencionalmente dados de crianças por meio do web app.</p>
 
   <h2>12. Alterações desta política</h2>
-  <p>Esta política poderá ser atualizada para refletir mudanças legais ou funcionais. Quando uma alteração material exigir novo aceite, o web app voltará a exibir o aviso antes de iniciar.</p>
+  <p>Esta política poderá ser atualizada para refletir mudanças legais ou funcionais. Alterações materiais serão comunicadas pelos canais adequados; quando necessário, a extensão Chrome solicitará novo consentimento.</p>
 
   <h2>13. Contato</h2>
   <p>E-mail: <a href="mailto:upgferreira@gmail.com">upgferreira@gmail.com</a></p>

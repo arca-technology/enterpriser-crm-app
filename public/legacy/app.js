@@ -42,12 +42,16 @@ function savePrivacyConsent(value) {
   });
 }
 async function ensurePrivacyConsent() {
-  const current = await readPrivacyConsent();
-  if (current?.accepted && current?.version === PRIVACY_VERSION) {
-    document.getElementById("privacy-gate").hidden = true;
+  const gate = document.getElementById("privacy-gate");
+  if (!IS_EXTENSION_CONTEXT) {
+    gate.hidden = true;
     return true;
   }
-  const gate = document.getElementById("privacy-gate");
+  const current = await readPrivacyConsent();
+  if (current?.accepted && current?.version === PRIVACY_VERSION) {
+    gate.hidden = true;
+    return true;
+  }
   gate.hidden = false;
   return new Promise((resolve) => {
     document.getElementById("privacy-accept").onclick = async () => {
@@ -56,9 +60,7 @@ async function ensurePrivacyConsent() {
       resolve(true);
     };
     document.getElementById("privacy-decline").onclick = () => {
-      document.getElementById("privacy-message").textContent = APP_VARIANT === "web"
-        ? "O aceite é necessário para usar o CRM web com dados cadastrados ou importados."
-        : "O consentimento é necessário para usar o CRM. Nenhuma captura de Reddit ou WhatsApp será ativada sem sua autorização.";
+      document.getElementById("privacy-message").textContent = "O consentimento é necessário para usar a extensão. Nenhuma captura de Reddit ou WhatsApp será ativada sem sua autorização.";
     };
   });
 }
@@ -1024,6 +1026,14 @@ async function loadAll() {
 const brl = (n) => (n == null || n === "" ? "—" : new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(n));
 const dt = (s) => (s ? new Date(s).toLocaleDateString("pt-BR") : "—");
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function safeHttpUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return ["http:", "https:"].includes(url.protocol) ? url.href : "";
+  } catch (e) {
+    return "";
+  }
+}
 const badge = (v, label) => `<span class="badge b-${v}">${esc(label || v)}</span>`;
 function splitMultiValues(value) {
   return String(value || "").split(/[;,\n]+/).map((item) => item.trim()).filter(Boolean);
@@ -1174,7 +1184,7 @@ function columns(tab, c) {
       { k: "description", h: "DESCRIÇÃO", cls: "muted" },
       { k: "price", h: "PREÇO A VISTA", num: true, fmt: brl, cls: "pos" },
       { k: "price_installment", h: "PREÇO PARCELADO", num: true, fmt: brl, cls: "pos" },
-      { k: "sales_page", h: "PÁGINA DE VENDAS", fmt: (v) => v ? `<a href="${esc(v)}" target="_blank" rel="noopener">Abrir</a>` : "—", csv: (v) => v || "" },
+      { k: "sales_page", h: "PÁGINA DE VENDAS", fmt: (v) => safeHttpUrl(v) ? `<a href="${esc(safeHttpUrl(v))}" target="_blank" rel="noopener">Abrir</a>` : "—", csv: (v) => v || "" },
       { k: "duration_days", h: "DURAÇÃO (DIAS)", num: true, cls: "muted" },
       { k: "status", h: "STATUS", fmt: (v) => badge(v === "Ativo" ? "open" : v === "Pausado" ? "lead" : "lost", v) }];
     case "deals": return [
@@ -1225,12 +1235,12 @@ function columns(tab, c) {
       { k: "contact_name", h: "NOME", fmt: (v, row, c) => (row.contact_id && c.contactById[row.contact_id]?.name) || v || "—" },
       { k: "contact", h: "CONTATO", fmt: (_v, row) => contactForConversation(row) || "—" },
       { k: "username", h: "USUÁRIO", fmt: (v, row) => v ? (row.source === "Reddit" ? `u/${v}` : v) : "—" },
-      { k: "profile_url", h: "URL PERFIL", fmt: (v) => v ? `<a href="${esc(v)}" target="_blank" rel="noopener">Perfil</a>` : "—", csv: (v) => v || "" },
+      { k: "profile_url", h: "URL PERFIL", fmt: (v) => safeHttpUrl(v) ? `<a href="${esc(safeHttpUrl(v))}" target="_blank" rel="noopener">Perfil</a>` : "—", csv: (v) => v || "" },
       { k: "source", h: "CANAL" },
       { k: "first_at", h: "PRIMEIRO CONTATO" },
       { k: "last_at", h: "ÚLTIMO CONTATO" },
       { k: "imported_at", h: "DATA REGISTRO" },
-      { k: "chat_url", h: "URL CHAT", fmt: (v) => v ? `<a href="${esc(v)}" target="_blank" rel="noopener">Abrir</a>` : "—", csv: (v) => v || "" },
+      { k: "chat_url", h: "URL CHAT", fmt: (v) => safeHttpUrl(v) ? `<a href="${esc(safeHttpUrl(v))}" target="_blank" rel="noopener">Abrir</a>` : "—", csv: (v) => v || "" },
       { k: "origin", h: "DADO" },
       { k: "conversation", h: "", fmt: (_v, row) => `<button class="rowbtn open-chat" data-id="${esc(row.id)}" title="Ver mensagens no CRM">Ver</button>` }];
   }
@@ -4548,6 +4558,10 @@ function setTheme(light) {
 
 function openSettings() {
   const c = getCfg();
+  const privacySettings = IS_EXTENSION_CONTEXT ? `<div class="help-content" style="padding-bottom:0"><h4>Privacidade da extensão</h4>
+      <p><a href="privacy-policy.html" target="_blank" rel="noopener">Ler a Política de Privacidade</a> ou revogar o consentimento da extensão.</p>
+    </div>` : "";
+  const privacyButton = IS_EXTENSION_CONTEXT ? '<button class="btn danger" id="privacy-revoke" type="button">Revogar consentimento</button>' : "";
   sidePanel("Configurações", `<div class="help-content" style="padding-bottom:0">
       <h4 style="margin-top:0">Meus dados</h4>
       <p>Usado pra te identificar nas conversas importadas ou sincronizadas pela extensão.</p>
@@ -4568,12 +4582,10 @@ function openSettings() {
         <input data-k="anonKey" value="${esc(c.anonKey)}" placeholder="eyJhbGci..."></div>
     </div>
     <div class="panel-list" style="padding-top:0">Deixe URL/key em branco para usar dados de exemplo.</div>
-    <div class="help-content" style="padding-bottom:0"><h4>Privacidade</h4>
-      <p><a href="privacy-policy.html" target="_blank" rel="noopener">Ler a Política de Privacidade</a> ou revogar o aceite de uso de dados.</p>
-    </div>
-    <div class="modal-foot"><button class="btn danger" id="privacy-revoke" type="button">Revogar consentimento</button><button class="btn primary" id="save">Salvar e conectar</button></div>`, { closeOnOverlay: true });
-  document.getElementById("privacy-revoke").addEventListener("click", async () => {
-    if (!window.confirm("Revogar o aceite de uso de dados? Será necessário aceitar novamente para usar o CRM.")) return;
+    ${privacySettings}
+    <div class="modal-foot">${privacyButton}<button class="btn primary" id="save">Salvar e conectar</button></div>`, { closeOnOverlay: true });
+  document.getElementById("privacy-revoke")?.addEventListener("click", async () => {
+    if (!window.confirm("Revogar o consentimento da extensão? Será necessário aceitar novamente para usá-la.")) return;
     await savePrivacyConsent(null);
     closeModal();
     await startApp();
@@ -4595,46 +4607,85 @@ function openSettings() {
 
 // ---------- Ajuda ----------
 function helpContentHtml() {
+  const platformText = IS_EXTENSION_CONTEXT
+    ? "Você está usando a extensão Chrome, que acrescenta captura de WhatsApp Web e Reddit Chat e importação do Google Contatos."
+    : "Você está usando a versão web. Captura automática de WhatsApp Web e Reddit Chat e importação do Google Contatos permanecem exclusivas da extensão Chrome.";
   return `<div class="help-content">
-    <h4>Visão geral</h4>
-    <p>O ENTERPRISER • CRM organiza pessoas, empresas, conversas, negócios, produtos e entregas num só lugar.
-    Os dados ficam no Supabase quando conectado (veja <b>Configurações</b>); sem conexão, o app roda com dados de exemplo.</p>
+    <div class="help-intro"><strong>ENTERPRISER • CRM</strong><span>Manual das funções disponíveis</span></div>
+    <p>O CRM reúne relacionamento comercial, vendas e execução das entregas. ${platformText}</p>
+    <nav class="help-index" aria-label="Índice da ajuda">
+      <a href="#help-start">Acesso e navegação</a><a href="#help-modules">Módulos</a><a href="#help-tables">Tabelas e filtros</a>
+      <a href="#help-sales">Vendas</a><a href="#help-catalog">Cadastros</a><a href="#help-deliveries">Entregas</a>
+      <a href="#help-conversations">Conversas</a><a href="#help-tools">Ferramentas</a><a href="#help-admin">Administração</a>
+    </nav>
 
-    <h4>Módulos</h4>
-    <ul>
-      <li><b>Home</b> — visão geral de pessoas, empresas, negócios, entregas e próximas tarefas.</li>
-      <li><b>Pessoas</b> — contatos individuais: telefone, e-mail, redes sociais, empresa vinculada.</li>
-      <li><b>Empresas</b> — cadastro de CNPJ com dados cadastrais, endereço e atividades.</li>
-      <li><b>Conversas</b> — mensagens importadas de um .txt/.zip exportado, prontas pra virar contato ou negócio. A captura automática fica disponível na extensão Chrome.</li>
-      <li><b>Negócios</b> — cada um segue um pipeline (fluxo de etapas) próprio, com status aberto/ganho/perdido.</li>
-      <li><b>Produtos</b> — o catálogo vendido, com preços, duração e tarefas automáticas da entrega.</li>
-      <li><b>Entregas</b> — execução pós-venda de projetos, imersões, treinamentos, consultorias e eventos.</li>
-      <li><b>Tarefas</b> — lista consolidada das tarefas de todas as entregas, incluindo cliente, entrega, responsável e prazo.</li>
-    </ul>
+    <section class="help-section" id="help-start"><h4>Acesso e navegação</h4>
+      <div class="help-columns"><div><b>Login e dados</b><p>Na web, o acesso usa a conta do Supabase fornecida pelo administrador. Apenas perfis ativos entram no CRM. O tema claro ou escuro fica salvo neste navegador.</p></div>
+      <div><b>Cabeçalho e rodapé</b><p>O logo retorna à Home. Os módulos ficam no centro; à direita estão notificações, integrações, tema, configurações e sair. No rodapé ficam LOG, AJUDA, CADASTROS, FERRAMENTAS e ATUALIZAÇÕES.</p></div></div>
+      <p class="help-note">Notificações ainda não possuem automação ativa. O LOG aparece apenas para administradores.</p>
+    </section>
 
-    <h4>Visualizações</h4>
-    <p>No canto superior direito é possível trocar entre <b>Tabela</b> (lista completa), <b>Matriz</b> (cartões resumidos — em Negócios vira o quadro do pipeline) e <b>Dashboard</b> (métricas gerais).</p>
+    <section class="help-section" id="help-modules"><h4>Módulos principais</h4><ul>
+      <li><b>Home:</b> totais de pessoas, empresas, negócios, produtos e entregas, além de tarefas pendentes, atrasadas e próximas.</li>
+      <li><b>Pessoas:</b> contatos, telefones, e-mails, empresa, cargo, canal, CPF, nascimento, redes sociais e grupos.</li>
+      <li><b>Empresas:</b> CNPJ, razão social, nome fantasia, contatos, endereço, situação cadastral, atividades e observações. A consulta pelo CNPJ preenche dados públicos disponíveis.</li>
+      <li><b>Conversas:</b> histórico importado ou capturado, associação a pessoas e conversão individual ou em lote para negócio.</li>
+      <li><b>Negócios:</b> empresa, contato, produto, responsável, pipeline, etapa, origem, valor, previsão e situação aberto, ganho ou perdido.</li>
+      <li><b>Entregas:</b> projetos e serviços pós-venda com cliente, produto, período, status, tarefas, objetivos e metas.</li>
+      <li><b>Tarefas:</b> visão consolidada de todas as entregas com origem, prioridade, dependências, checklist, objetivo, responsáveis, prazo e status.</li>
+    </ul></section>
 
-    <h4>Pipelines</h4>
-    <p>Cada conta pode ter até 5 pipelines, cada um com suas próprias etapas — dá pra acompanhar fluxos diferentes de negociação (ex.: "Vendas B2B", "Renovação"). Gerencie em <b>Cadastros → Pipeline</b>. No Quadro de Negócios, arraste um card entre colunas pra mudar de etapa, ou solte na coluna <b>Ganho</b> pra fechar o negócio — isso já cria a entrega automaticamente.</p>
+    <section class="help-section" id="help-tables"><h4>Tabelas, busca e filtros</h4><ul>
+      <li>A busca central filtra imediatamente os registros da tela atual.</li>
+      <li>Clique no título de uma coluna para ordenar; use <b>Ctrl+clique</b> no título para escolher valores de filtro.</li>
+      <li>Filtros ativos aparecem na faixa acima da tabela, na ordem das colunas. Clique no × de uma badge para removê-la ou use <b>Limpar tudo</b>.</li>
+      <li>O botão <b>⊞</b> permite mostrar, ocultar e arrastar colunas. A preferência fica salva neste navegador.</li>
+      <li>O botão <b>⬆⬇</b> exporta CSV usando colunas visíveis ou todas as colunas e abre a importação de conversas quando disponível.</li>
+      <li>As tabelas longas têm paginação e rolagem horizontal. Em módulos compatíveis, o menu de visualização oferece Tabela, Quadro, Calendário ou Gantt.</li>
+    </ul></section>
 
-    <h4>Ganho → Entrega automática</h4>
-    <p>Quando um negócio entra em "Ganho" (pelo formulário ou arrastando na Matriz), uma entrega é criada com o cliente, o produto, o prazo e as tarefas cadastradas no produto.</p>
+    <section class="help-section" id="help-sales"><h4>Negócios e pipelines</h4>
+      <p>Cadastre até cinco pipelines, cada um com nome e etapas próprias, em <b>Cadastros → Pipeline</b>. No Quadro de Negócios, arraste cartões entre etapas, Ganho e Perdido.</p>
+      <p><b>Negócio ganho:</b> ao marcar um negócio como ganho, o CRM cria a Entrega vinculada ao cliente e ao produto. O nome, período e tipo são formados a partir dos dados comerciais e do produto.</p>
+      <p><b>Automação do produto:</b> tarefas, objetivos e metas configurados no produto são copiados para a nova entrega, preservando responsáveis, recorrências, checklists e dependências.</p>
+    </section>
 
-    <h4>Conversas → Negócio</h4>
-    <p>Na aba Conversas, o botão <b>+</b> em cada linha transforma aquela conversa num negócio real: cria (ou reaproveita) o contato e já registra o negócio. Também dá pra selecionar várias conversas e usar "Associar contato" ou "Criar negociação" em lote.</p>
+    <section class="help-section" id="help-catalog"><h4>Cadastros</h4><ul>
+      <li><b>Produtos:</b> categoria, descrição, preços, página de vendas, duração e status. O ícone de configuração abre Tarefas, Objetivos e Metas do produto.</li>
+      <li><b>Tarefas do produto:</b> grupo, setor, canal, tipo, prioridade, informação, recorrência, checklist, objetivo, responsáveis e dependências. É possível ordenar, clonar e reaproveitar tarefas prontas.</li>
+      <li><b>Objetivos:</b> critério de conclusão, prazo sugerido, responsável e dependência de outros objetivos e/ou tarefas.</li>
+      <li><b>Metas:</b> indicador, comparação, valor-alvo, unidade, prazo, responsável e dependência de outras metas e/ou tarefas.</li>
+      <li><b>Pipeline:</b> criação e edição dos fluxos comerciais e suas etapas.</li>
+      <li><b>Usuários:</b> nome, e-mail, telefone, perfil, função, cargo, status e acesso ao login.</li>
+    </ul><p class="help-note">Dependências cíclicas são bloqueadas. Uma tarefa, objetivo ou meta dependente só avança quando os itens anteriores forem concluídos.</p></section>
 
-    <h4>Conversas</h4>
-    <p>Na versão web, importe conversas exportadas em .txt ou .zip pela aba Conversas. A captura automática de WhatsApp Web e Reddit Chat continua sendo um recurso da extensão Chrome.</p>
+    <section class="help-section" id="help-deliveries"><h4>Detalhes da entrega</h4>
+      <p>Abra uma entrega para acessar as abas <b>Tarefas</b>, <b>Objetivos</b> e <b>Metas</b>. Todas possuem busca, seleção de colunas e os modos Tabela, Matriz e Dashboard.</p><ul>
+      <li><b>Tarefas:</b> crie tarefas do dia a dia, altere status e prazo, acompanhe checklists, notas, responsáveis e bloqueios.</li>
+      <li><b>Objetivos:</b> acompanhe progresso calculado pelas tarefas vinculadas, responsável, prazo, dependências e status.</li>
+      <li><b>Metas:</b> atualize valor atual, indicador, valor-alvo, prazo, dependências e status. Metas atingidas podem ser concluídas.</li>
+      <li><b>Matriz:</b> distribui itens por A fazer, Em andamento e Concluído. <b>Dashboard:</b> resume andamento, concluídos, atrasados e bloqueados.</li>
+    </ul></section>
 
-    <h4>Dados</h4>
-    <p>O botão <b>⬆⬇</b> exporta a aba atual em CSV (colunas ativas ou todas) e importa conversas exportadas do WhatsApp (.txt ou .zip). O botão <b>⊞</b> escolhe quais colunas aparecem na tabela.</p>
+    <section class="help-section" id="help-conversations"><h4>Conversas e integrações</h4>
+      <p>Na web, importe arquivos <b>.txt</b> ou <b>.zip</b> exportados do WhatsApp. Abra o histórico dentro do CRM, associe a uma pessoa ou selecione várias conversas para criar uma negociação em lote.</p>
+      <p>Na extensão Chrome, WhatsApp Web e Reddit Chat podem alimentar a fila automaticamente. Google Contatos permite selecionar pessoas, criar ou atualizar contatos e criar empresas identificadas pelos dados do Google.</p>
+      <p>O painel Integrações mostra o que está ativo e o que permanece em desenvolvimento.</p>
+    </section>
 
-    <h4>Usuários</h4>
-    <p>A aba <b>Usuários</b> em Cadastros reúne as pessoas que podem ficar como responsáveis pelos negócios e tarefas.</p>
+    <section class="help-section" id="help-tools"><h4>Ferramentas</h4><ul>
+      <li><b>Arquivos:</b> catálogo de atalhos para pastas, como links do Google Drive, com nome e descrição. O CRM guarda o link, não copia os arquivos.</li>
+      <li><b>E-mails:</b> cadastro de CNPJ, cliente, endereço de e-mail e senha, com ações para revelar e copiar. Ao informar um CNPJ conhecido, o cliente pode ser preenchido automaticamente.</li>
+      <li>Busca e seleção de colunas funcionam nas duas abas.</li>
+    </ul><p class="help-note"><b>Atenção:</b> Arquivos e E-mails são salvos somente no armazenamento deste navegador. As senhas ficam locais e não são sincronizadas com o Supabase; use esse recurso apenas em dispositivo confiável.</p></section>
 
-    <h4>Configurações</h4>
-    <p>Em Configurações fica a conexão com o Supabase (URL do projeto e chave anon). Deixando em branco, o app usa dados de exemplo pra teste.</p>
+    <section class="help-section" id="help-admin"><h4>Administração e suporte</h4><ul>
+      <li><b>LOG:</b> administradores consultam as alterações recentes registradas nas principais entidades.</li>
+      <li><b>Usuários:</b> o administrador cria ou atualiza acessos, define perfil e pode inativar colaboradores.</li>
+      <li><b>Configurações:</b> guarda identificação usada em conversas e a conexão Supabase. URL e chave vazias ativam os dados de demonstração.</li>
+      <li><b>Atualizações:</b> mostra um resumo da versão instalada.</li>
+      <li><b>Sair:</b> encerra a sessão local do usuário.</li>
+    </ul><p class="help-note">Na versão web não existe tela obrigatória de aceite. O consentimento permanece na extensão por causa das funções de captura automática.</p></section>
   </div>`;
 }
 function openHelpModal() {

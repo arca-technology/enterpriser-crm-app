@@ -489,13 +489,23 @@
   .checklist-item.done input[type="text"]{color:var(--muted);text-decoration:line-through}
   .checklist-new{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;margin-top:8px}
   .checklist-new input{min-width:0;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font:inherit}
-  .help-content{padding:18px 26px}
+  .help-content{width:100%;max-width:1180px;margin:0 auto;padding:22px 28px}
   .help-content h4{color:var(--text);font-size:12px;text-transform:uppercase;letter-spacing:.4px;
-    margin:22px 0 8px;border-bottom:1px solid var(--border2);padding-bottom:6px}
+    margin:20px 0 7px}
   .help-content h4:first-child{margin-top:0}
   .help-content p{color:var(--muted);font-size:12.5px;line-height:1.6;margin:0 0 6px}
   .help-content ul{margin:6px 0 0;padding-left:18px;color:var(--muted);font-size:12.5px;line-height:1.7}
   .help-content b{color:var(--text)}
+  .help-intro{display:flex;align-items:baseline;gap:12px;padding-bottom:8px;border-bottom:1px solid var(--border2)}
+  .help-intro strong{font-size:15px}.help-intro span{color:var(--muted);font-size:12px}
+  .help-index{display:flex;align-items:center;gap:6px;overflow-x:auto;padding:12px 0 8px;border-bottom:1px solid var(--border2)}
+  .help-index a{color:var(--muted);border:1px solid var(--border);background:var(--panel2);border-radius:5px;padding:6px 9px;font-size:10.5px;font-weight:700;text-decoration:none;white-space:nowrap;text-transform:uppercase}
+  .help-index a:hover{color:var(--text);border-color:var(--blue)}
+  .help-section{scroll-margin-top:12px;padding:15px 0 17px;border-bottom:1px solid var(--border2)}
+  .help-section:last-child{border-bottom:0}.help-section h4{margin-top:0}
+  .help-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
+  .help-columns>div>b{display:block;margin-bottom:4px;font-size:12px}
+  .help-note{margin-top:10px!important;padding:8px 10px;border-left:2px solid var(--cyan);background:var(--panel2)}
   .col.won{border-color:var(--green)}
   .col.won h4{color:var(--green)}
   .col.lost{border-color:var(--red)}
@@ -571,6 +581,9 @@
   @media(max-width:700px){
     .modal.full>h3>.modal-title{display:none}
     .modal-header-tabs{max-width:calc(100% - 58px);gap:5px}
+    .help-content{padding:18px 16px}
+    .help-columns{grid-template-columns:1fr}
+    .help-intro{align-items:flex-start;flex-direction:column;gap:2px}
   }
   .form{padding:16px 18px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .form .full{grid-column:1 / -1}

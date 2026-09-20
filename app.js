@@ -595,6 +595,36 @@ async function syncProductGoals() {
     else saveDeliveryGoals(goals);
   }
 }
+async function syncDeliveryGoalDependencies() {
+  if (!cache) return;
+  const templates = loadProductGoals();
+  const goals = loadDeliveryGoals();
+  const tasks = loadProjectTasks();
+  let changed = false;
+  for (const goal of goals) {
+    const template = templates.find((item) => item.id === goal.source_template_id);
+    if (!template) continue;
+    const dependencyGoalIds = normalizeIdList(template.dependency_goal_template_ids)
+      .map((templateId) => goals.find((item) => item.project_id === goal.project_id && item.source_template_id === templateId)?.id)
+      .filter(Boolean);
+    const dependencyActivityIds = normalizeIdList(template.dependency_activity_template_ids)
+      .flatMap((templateId) => tasks
+        .filter((item) => item.project_id === goal.project_id && item.source_template_id === templateId)
+        .sort(activityOccurrenceSort)
+        .map((item) => item.id));
+    const sameGoals = JSON.stringify(normalizeIdList(goal.dependency_goal_ids)) === JSON.stringify(dependencyGoalIds);
+    const sameActivities = JSON.stringify(normalizeIdList(goal.dependency_activity_ids)) === JSON.stringify(dependencyActivityIds);
+    if (sameGoals && sameActivities) continue;
+    const updates = { dependency_goal_ids: dependencyGoalIds, dependency_activity_ids: dependencyActivityIds };
+    Object.assign(goal, updates, { updated_at: new Date().toISOString() });
+    if (isLive()) await updateRow("deliveryGoals", goal.id, updates);
+    changed = true;
+  }
+  if (changed) {
+    if (isLive()) cache.deliveryGoals = goals;
+    else saveDeliveryGoals(goals);
+  }
+}
 async function syncProductActivities() {
   if (!cache) return;
   const templates = loadProductActivities();
@@ -687,6 +717,7 @@ async function syncProductActivities() {
     if (isLive()) cache.activityRecords = tasks;
     else saveProjectTasks(tasks);
   }
+  await syncDeliveryGoalDependencies();
 }
 function activityOccurrenceSort(a, b) {
   return String(a.due_date || "9999-12-31").localeCompare(String(b.due_date || "9999-12-31"))
@@ -1999,10 +2030,16 @@ function renderProductGoals() {
   const rows = goals.map((item) => {
     const owner = cache.userById[item.default_owner_id]?.full_name || cache.userById[item.default_owner_id]?.name || "—";
     const target = `${GOAL_COMPARISON_LABEL[item.comparison] || "No mínimo"} ${Number(item.target_value).toLocaleString("pt-BR")} ${item.unit || ""}`.trim();
+    const dependencyGoals = normalizeIdList(item.dependency_goal_template_ids)
+      .map((id) => goals.find((goal) => goal.id === id)?.name).filter(Boolean);
+    const dependencyActivities = normalizeIdList(item.dependency_activity_template_ids)
+      .map((id) => loadProductActivities().find((activity) => activity.id === id)).filter(Boolean).map(activityDisplayName);
+    const dependencies = [...dependencyGoals, ...dependencyActivities].join(", ") || "—";
     return `<tr>
       <td><strong>${esc(item.name)}</strong></td>
       <td>${esc(item.metric)}</td>
       <td>${esc(target)}</td>
+      <td>${esc(dependencies)}</td>
       <td>${item.target_days == null ? "—" : `${esc(item.target_days)} dia(s)`}</td>
       <td>${esc(owner)}</td>
       <td class="act"><button class="rowbtn pg-edit" data-id="${esc(item.id)}" title="Editar">✎</button><button class="rowbtn pg-delete" data-id="${esc(item.id)}" title="Excluir">✕</button></td>
@@ -2010,8 +2047,8 @@ function renderProductGoals() {
   }).join("");
   root.innerHTML = `<div class="modal-toolbar"><span class="muted">${goals.length} meta(s) do produto</span><button class="btn primary" id="pg-new">+ Meta</button></div>
     <div class="product-activity-list"><table><thead><tr>
-    <th>Meta</th><th>Indicador</th><th>Valor-alvo</th><th>Prazo sugerido</th><th>Responsável padrão</th><th></th>
-  </tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Nenhuma meta cadastrada para este produto.</td></tr>'}</tbody></table></div>`;
+    <th>Meta</th><th>Indicador</th><th>Valor-alvo</th><th>Depende de</th><th>Prazo sugerido</th><th>Responsável padrão</th><th></th>
+  </tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">Nenhuma meta cadastrada para este produto.</td></tr>'}</tbody></table></div>`;
   document.getElementById("pg-new").addEventListener("click", () => openProductGoalDrawer());
   document.querySelectorAll(".pg-edit").forEach((button) => button.addEventListener("click", () => openProductGoalDrawer(button.dataset.id)));
   document.querySelectorAll(".pg-delete").forEach((button) => button.addEventListener("click", () => deleteProductGoal(button.dataset.id)));
@@ -2023,6 +2060,12 @@ function openProductGoalDrawer(editId = null) {
   const current = loadProductGoals().find((item) => item.id === editId) || {};
   const comparisonOptions = Object.entries(GOAL_COMPARISON_LABEL).map(([value, label]) =>
     `<option value="${value}"${value === (current.comparison || "at_least") ? " selected" : ""}>${label}</option>`).join("");
+  const goalDependencyOptions = loadProductGoals()
+    .filter((item) => item.product_id === productActivityState.productId && item.id !== editId)
+    .map((item) => ({ value: item.id, label: item.name }));
+  const activityDependencyOptions = loadProductActivities()
+    .filter((item) => item.product_id === productActivityState.productId)
+    .map((item) => ({ value: item.id, label: activityDisplayName(item) }));
   const overlay = document.createElement("div");
   overlay.id = "product-activity-drawer-overlay";
   overlay.className = "activity-form-overlay";
@@ -2036,6 +2079,8 @@ function openProductGoalDrawer(editId = null) {
       <div class="field"><label>Unidade</label><input id="pg-unit" value="${esc(current.unit || "")}" placeholder="Ex.: pedidos/mês, %, R$"></div>
       <div class="field"><label>Prazo sugerido (dias)</label><input id="pg-target-days" type="number" min="0" step="1" value="${esc(current.target_days ?? "")}" placeholder="Ex.: 90"></div>
       <div class="field"><label>Responsável padrão</label><select id="pg-owner">${userOptions(current.default_owner_id || "")}</select></div>
+      <div class="field"><label>Depende de metas</label>${multiPickerHtml("pg-goal-dependencies", goalDependencyOptions, new Set(normalizeIdList(current.dependency_goal_template_ids)), "Selecionar metas")}</div>
+      <div class="field"><label>Depende de tarefas</label>${multiPickerHtml("pg-activity-dependencies", activityDependencyOptions, new Set(normalizeIdList(current.dependency_activity_template_ids)), "Selecionar tarefas")}</div>
     </div>
     <div class="modal-foot"><button class="btn" id="pg-cancel">Cancelar</button><button class="btn primary" id="pg-save">${current.id ? "Salvar" : "Criar"}</button></div>
   </aside>`;
@@ -2044,7 +2089,22 @@ function openProductGoalDrawer(editId = null) {
   document.getElementById("pg-close").addEventListener("click", closeProductActivityDrawer);
   document.getElementById("pg-cancel").addEventListener("click", closeProductActivityDrawer);
   document.getElementById("pg-save").addEventListener("click", saveProductGoal);
+  wireMultiPicker("pg-goal-dependencies");
+  wireMultiPicker("pg-activity-dependencies");
   document.getElementById("pg-name")?.focus();
+}
+
+function createsGoalDependencyCycle(rows, currentId, dependencyIds) {
+  const reachesCurrent = (candidateId, path = new Set()) => {
+    if (!candidateId) return false;
+    if (candidateId === currentId) return true;
+    if (path.has(candidateId)) return false;
+    const candidate = rows.find((item) => item.id === candidateId);
+    const nextPath = new Set(path).add(candidateId);
+    return normalizeIdList(candidate?.dependency_goal_template_ids)
+      .some((nextId) => reachesCurrent(nextId, nextPath));
+  };
+  return dependencyIds.some((dependencyId) => reachesCurrent(dependencyId));
 }
 
 async function saveProductGoal() {
@@ -2054,6 +2114,13 @@ async function saveProductGoal() {
   if (!name || !metric || targetValue === "") { toast("Informe a meta, o indicador e o valor-alvo.", true); return; }
   const rows = loadProductGoals();
   const current = rows.find((item) => item.id === productActivityState.goalEditId);
+  const recordId = current?.id || crypto.randomUUID();
+  const dependencyGoalIds = multiPickerValues("pg-goal-dependencies");
+  const dependencyActivityIds = multiPickerValues("pg-activity-dependencies");
+  if (createsGoalDependencyCycle(rows, recordId, dependencyGoalIds)) {
+    toast("Essa dependência criaria um ciclo entre as metas.", true);
+    return;
+  }
   const productRows = rows.filter((item) => item.product_id === productActivityState.productId);
   const targetDays = document.getElementById("pg-target-days").value;
   const body = {
@@ -2065,6 +2132,8 @@ async function saveProductGoal() {
     unit: document.getElementById("pg-unit").value.trim(),
     target_days: targetDays === "" ? null : Number(targetDays),
     default_owner_id: document.getElementById("pg-owner").value || null,
+    dependency_goal_template_ids: dependencyGoalIds,
+    dependency_activity_template_ids: dependencyActivityIds,
     sort_order: current?.sort_order ?? (Math.max(-1, ...productRows.map((item) => Number(item.sort_order || 0))) + 1),
     updated_at: new Date().toISOString()
   };
@@ -2073,12 +2142,13 @@ async function saveProductGoal() {
       const saved = isLive() ? await updateRow("productGoals", current.id, body) : { ...current, ...body };
       Object.assign(current, saved);
     } else {
-      const draft = { id: crypto.randomUUID(), ...body, created_at: new Date().toISOString() };
+      const draft = { id: recordId, ...body, created_at: new Date().toISOString() };
       rows.push(isLive() ? await createRow("productGoals", draft) : draft);
     }
     if (isLive()) cache.productGoals = rows;
     else saveProductGoals(rows);
     await syncProductGoals();
+    await syncDeliveryGoalDependencies();
     closeProductActivityDrawer();
     if (document.getElementById("registrations-root")) renderRegistrationsSection();
     else renderProductGoals();
@@ -2713,6 +2783,27 @@ function deliveryGoalReached(goal, value = Number(goal.current_value || 0)) {
   return value >= target;
 }
 
+function deliveryGoalDependencyState(goal) {
+  const goals = loadDeliveryGoals();
+  const tasks = loadProjectTasks();
+  const dependencyGoals = normalizeIdList(goal.dependency_goal_ids)
+    .map((id) => goals.find((item) => item.id === id)).filter(Boolean);
+  const dependencyActivities = normalizeIdList(goal.dependency_activity_ids)
+    .map((id) => tasks.find((item) => item.id === id)).filter(Boolean);
+  const pendingGoals = dependencyGoals.filter((item) => item.status !== "done");
+  const pendingActivities = dependencyActivities.filter((item) => item.status !== "done");
+  return { dependencyGoals, dependencyActivities, pendingGoals, pendingActivities, blocked: Boolean(pendingGoals.length || pendingActivities.length) };
+}
+
+function deliveryGoalDependencyLabel(goal) {
+  const state = deliveryGoalDependencyState(goal);
+  const names = [
+    ...state.dependencyGoals.map((item) => item.name),
+    ...state.dependencyActivities.map(activityDisplayName)
+  ];
+  return names.join(", ") || "—";
+}
+
 function renderDeliveryGoals(projectId) {
   const goals = loadDeliveryGoals().filter((item) => item.project_id === projectId)
     .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
@@ -2721,18 +2812,20 @@ function renderDeliveryGoals(projectId) {
     const target = Number(goal.target_value || 0);
     const progress = target ? Math.max(0, Math.min(100, Math.round(current / target * 100))) : 0;
     const targetLabel = `${GOAL_COMPARISON_LABEL[goal.comparison] || "No mínimo"} ${target.toLocaleString("pt-BR")} ${goal.unit || ""}`.trim();
+    const dependencyState = deliveryGoalDependencyState(goal);
+    const dependencyLabel = deliveryGoalDependencyLabel(goal);
     return `<tr data-goal-id="${esc(goal.id)}">
       <td><strong>${esc(goal.name)}</strong></td><td>${esc(goal.metric)}</td>
       <td><input class="objective-control delivery-goal-current" type="number" step="any" value="${esc(current)}"></td>
-      <td>${esc(targetLabel)}</td><td>${progress}%</td>
+      <td>${esc(targetLabel)}</td><td>${progress}%</td><td>${esc(dependencyLabel)}${dependencyState.blocked ? '<div class="muted">Aguardando dependências</div>' : ""}</td>
       <td><select class="objective-control delivery-goal-owner">${userOptions(goal.owner_id || "")}</select></td>
       <td><input class="objective-control delivery-goal-due" type="date" value="${esc(goal.due_date || "")}"></td>
       <td><select class="objective-control delivery-goal-status">${taskStatusOptions(goal.status || "todo")}</select></td>
     </tr>`;
   }).join("");
   return `<div class="task-table-shell"><div class="task-table-wrap"><table><thead><tr>
-    <th>Meta</th><th>Indicador</th><th>Valor atual</th><th>Valor-alvo</th><th>Progresso</th><th>Responsável</th><th>Prazo</th><th>Status</th>
-  </tr></thead><tbody>${rows || '<tr><td colspan="8" class="empty">Esta entrega ainda não possui metas.</td></tr>'}</tbody></table></div>
+    <th>Meta</th><th>Indicador</th><th>Valor atual</th><th>Valor-alvo</th><th>Progresso</th><th>Depende de</th><th>Responsável</th><th>Prazo</th><th>Status</th>
+  </tr></thead><tbody>${rows || '<tr><td colspan="9" class="empty">Esta entrega ainda não possui metas.</td></tr>'}</tbody></table></div>
   <div class="table-pagination"><span>${goals.length} meta(s)</span><div><span>Acompanhamento da entrega</span></div></div></div>`;
 }
 
@@ -2837,11 +2930,27 @@ async function updateDeliveryGoal(goalId, patch) {
   const rows = loadDeliveryGoals();
   const goal = rows.find((item) => item.id === goalId);
   if (!goal) return;
+  if (patch.status && patch.status !== "todo") {
+    const dependencyState = deliveryGoalDependencyState(goal);
+    if (dependencyState.blocked) {
+      const pending = dependencyState.pendingGoals[0]?.name || activityDisplayName(dependencyState.pendingActivities[0]);
+      toast(`Conclua "${pending}" antes de avançar esta meta.`, true);
+      return false;
+    }
+  }
+  if (patch.status && patch.status !== "done" && goal.status === "done") {
+    const activeDependent = rows.find((item) => normalizeIdList(item.dependency_goal_ids).includes(goal.id) && item.status !== "todo");
+    if (activeDependent) {
+      toast(`Volte "${activeDependent.name}" para A fazer antes de reabrir esta meta.`, true);
+      return false;
+    }
+  }
   const changes = { ...patch, updated_at: new Date().toISOString() };
   if (isLive()) await updateRow("deliveryGoals", goalId, changes);
   Object.assign(goal, changes);
   if (isLive()) cache.deliveryGoals = rows;
   else saveDeliveryGoals(rows);
+  return true;
 }
 
 function wireDeliveryGoals(projectId) {
@@ -2850,7 +2959,8 @@ function wireDeliveryGoals(projectId) {
     row.querySelector(".delivery-goal-current")?.addEventListener("change", async (event) => {
       const goal = loadDeliveryGoals().find((item) => item.id === goalId);
       const currentValue = Number(event.target.value || 0);
-      const status = goal && deliveryGoalReached(goal, currentValue) ? "done" : (goal?.status === "done" ? "doing" : goal?.status || "todo");
+      const reached = goal && deliveryGoalReached(goal, currentValue);
+      const status = reached && !deliveryGoalDependencyState(goal).blocked ? "done" : (goal?.status === "done" ? "doing" : goal?.status || "todo");
       await updateDeliveryGoal(goalId, { current_value: currentValue, status });
       renderProjectBoard(projectId);
     });
@@ -3687,17 +3797,40 @@ function render() {
 
 // ---------- Modal genérico ----------
 let modalCloseOverride = null;
+let modalLayerStack = [];
+function removeModalLayer(closeAction) {
+  modalLayerStack = modalLayerStack.filter((item) => item !== closeAction);
+}
+function closeTopModalLayer() {
+  const closeAction = modalLayerStack[modalLayerStack.length - 1];
+  if (!closeAction) return false;
+  closeAction();
+  return true;
+}
 function escCloseHandler(e) {
   if (e.key !== "Escape") return;
   const registrationFilter = document.getElementById("registration-filter-dd");
-  if (registrationFilter) { registrationFilter.remove(); return; }
+  if (registrationFilter) { registrationFilter.remove(); e.preventDefault(); e.stopImmediatePropagation(); return; }
+  const drawerOverlay = [...document.querySelectorAll(".activity-form-overlay")].at(-1);
+  if (drawerOverlay) {
+    const closeButton = drawerOverlay.querySelector(".modal-close-x");
+    if (closeButton) closeButton.click();
+    else drawerOverlay.remove();
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    return;
+  }
+  if (closeTopModalLayer()) { e.preventDefault(); e.stopImmediatePropagation(); return; }
   if (modalCloseOverride) modalCloseOverride();
   else closeModal();
+  e.preventDefault();
+  e.stopImmediatePropagation();
 }
 function closeModal() {
   document.getElementById("modal-root").innerHTML = "";
   document.getElementById("registration-filter-dd")?.remove();
   modalCloseOverride = null;
+  modalLayerStack = [];
   document.removeEventListener("keydown", escCloseHandler);
 }
 function shell(title, inner, opts = {}) {
@@ -3730,6 +3863,29 @@ function sidePanel(title, inner, opts = {}) {
   if (opts.closeOnOverlay) {
     document.getElementById("ov").addEventListener("click", (e) => { if (e.target.id === "ov") closeAction(); });
   }
+  return closeAction;
+}
+
+function nestedSidePanel(title, inner, opts = {}) {
+  const overlay = document.createElement("div");
+  overlay.className = "overlay side nested-modal-layer";
+  overlay.innerHTML = `<div class="modal side-panel">
+      <h3>${esc(title)}<button class="modal-close-x nested-side-close" title="Fechar (Esc)">✕</button></h3>
+      ${inner}
+    </div>`;
+  let closed = false;
+  const closeAction = () => {
+    if (closed) return;
+    closed = true;
+    overlay.remove();
+    removeModalLayer(closeAction);
+    if (typeof opts.onClose === "function") opts.onClose();
+  };
+  document.getElementById("modal-root").appendChild(overlay);
+  modalLayerStack.push(closeAction);
+  overlay.querySelector(".nested-side-close").addEventListener("click", closeAction);
+  if (opts.closeOnOverlay) overlay.addEventListener("click", (event) => { if (event.target === overlay) closeAction(); });
+  return closeAction;
 }
 
 function openForm(tab, id, opts = {}) {
@@ -3782,9 +3938,15 @@ function openForm(tab, id, opts = {}) {
   // Negócio e produto abrem em painel lateral (vindo da direita); os demais
   // cadastros continuam no modal central de sempre.
   const returnSection = opts.returnToRegistrations || null;
-  const returnToPrevious = returnSection ? () => openRegistrationsModal(returnSection) : closeModal;
-  if (SIDE_PANEL_TABS.has(tab)) sidePanel(title, body, { closeOnOverlay: true, onClose: returnSection ? returnToPrevious : null });
-  else shell(title, body, { onClose: returnSection ? returnToPrevious : null });
+  const nestedRegistration = Boolean(returnSection && document.getElementById("registrations-root"));
+  let returnToPrevious;
+  if (nestedRegistration) returnToPrevious = nestedSidePanel(title, body, { closeOnOverlay: true });
+  else {
+    returnToPrevious = returnSection ? () => openRegistrationsModal(returnSection) : closeModal;
+    if (SIDE_PANEL_TABS.has(tab)) sidePanel(title, body, { closeOnOverlay: true, onClose: returnSection ? returnToPrevious : null });
+    else shell(title, body, { onClose: returnSection ? returnToPrevious : null });
+  }
+  opts.closeAction = returnToPrevious;
 
   document.getElementById("cancel").addEventListener("click", returnToPrevious);
   document.getElementById("save").addEventListener("click", () => saveForm(tab, id, fs, opts));
@@ -3917,7 +4079,10 @@ async function saveForm(tab, id, fs, opts = {}) {
       if (dealId) await createProjectFromDeal({ id: dealId, company_id: body.company_id, contact_id: body.contact_id, product_id: body.product_id, title: body.title });
     }
     await init();
-    if (opts.returnToRegistrations) openRegistrationsModal(opts.returnToRegistrations);
+    if (opts.returnToRegistrations && document.getElementById("registrations-root")) {
+      opts.closeAction?.();
+      renderRegistrationsSection();
+    } else if (opts.returnToRegistrations) openRegistrationsModal(opts.returnToRegistrations);
     else closeModal();
   } catch (err) { toast("Erro ao salvar · " + err.message, true); }
 }
@@ -4146,6 +4311,7 @@ function wirePipelinesModal() {
 const ROLE_LABEL = { admin: "Administrador", developer: "Desenvolvedor", user: "Usuário" };
 let umState = { mode: "list" };
 let umReturnToRegistrations = false;
+let umCloseAction = null;
 function generateStrongPassword() {
   const groups = ["ABCDEFGHJKLMNPQRSTUVWXYZ", "abcdefghijkmnopqrstuvwxyz", "23456789", "!@#$%&*"];
   const randomFrom = (chars) => chars[crypto.getRandomValues(new Uint32Array(1))[0] % chars.length];
@@ -4172,11 +4338,22 @@ function openUsersModal(editId = null, returnToRegistrations = false) {
   if (user) umState = { mode: "form", editId: user.id, full_name: user.full_name || user.name || "", email: user.email || "", phone: user.phone || "", role: user.role || "user", function_name: user.function_name || "", job_title: user.job_title || "", status: user.status || "active", password: "", hasAccess: Boolean(user.auth_user_id) };
   else if (editId === "new") umState = { mode: "form", editId: null, full_name: "", email: "", phone: "", role: "user", function_name: "", job_title: "", status: "active", password: generateStrongPassword(), hasAccess: false };
   else umState = { mode: "list" };
-  sidePanel(user ? "Editar usuário" : editId === "new" ? "Novo usuário" : "Usuários · Responsáveis", `<div id="um-body"></div>`, {
-    closeOnOverlay: true,
-    onClose: returnToRegistrations ? () => openRegistrationsModal("users") : null
-  });
+  const title = user ? "Editar usuário" : editId === "new" ? "Novo usuário" : "Usuários · Responsáveis";
+  const nestedRegistration = Boolean(returnToRegistrations && document.getElementById("registrations-root"));
+  umCloseAction = nestedRegistration
+    ? nestedSidePanel(title, `<div id="um-body"></div>`, { closeOnOverlay: true })
+    : sidePanel(title, `<div id="um-body"></div>`, {
+      closeOnOverlay: true,
+      onClose: returnToRegistrations ? () => openRegistrationsModal("users") : null
+    });
   renderUsersModal();
+}
+function closeUsersModal() {
+  if (umReturnToRegistrations && document.getElementById("registrations-root")) {
+    umCloseAction?.();
+    renderRegistrationsSection();
+  } else if (umReturnToRegistrations) openRegistrationsModal("users");
+  else { umState = { mode: "list" }; renderUsersModal(); }
 }
 function renderUsersModal() {
   const el = document.getElementById("um-body");
@@ -4267,13 +4444,11 @@ function wireUsersModal() {
       await copyText(document.getElementById("credentials-value").value); toast("Acesso copiado.");
     });
     document.getElementById("credentials-done")?.addEventListener("click", () => {
-      if (umReturnToRegistrations) openRegistrationsModal("users");
-      else { umState = { mode: "list" }; renderUsersModal(); }
+      closeUsersModal();
     });
   } else {
     document.getElementById("cancel-form")?.addEventListener("click", () => {
-      if (umReturnToRegistrations) openRegistrationsModal("users");
-      else { umState = { mode: "list" }; renderUsersModal(); }
+      closeUsersModal();
     });
     document.getElementById("generate-password")?.addEventListener("click", () => {
       umState.password = generateStrongPassword();
@@ -4313,7 +4488,7 @@ function wireUsersModal() {
         if (password) {
           umState = { mode: "credentials", email, password };
           renderUsersModal();
-        } else if (umReturnToRegistrations) openRegistrationsModal("users");
+        } else if (umReturnToRegistrations) closeUsersModal();
         else { umState = { mode: "list" }; renderUsersModal(); }
       } catch (err) { toast("Erro ao salvar usuário · " + err.message, true); }
     });
@@ -4412,8 +4587,15 @@ function renderRegistrationsSection() {
     root.innerHTML = registrationTemplateTable("tarefa", groups.size, "Tarefa", "<th>Produtos</th><th>Grupo</th><th>Setor</th><th>Canal</th><th>Tipo</th><th>Prioridade</th><th>Recorrência</th><th>Informação</th><th>Checklist</th><th>Objetivo</th><th>Responsáveis padrão</th><th>Depende de</th>", rows, 14);
   } else if (section === "goals") {
     const items = loadProductGoals();
-    const rows = items.map((item) => `<tr><td><strong>${esc(item.name || "—")}</strong></td><td>${esc(registrationProductName(item.product_id))}</td><td>${esc(item.metric || "—")}</td><td>${esc(`${GOAL_COMPARISON_LABEL[item.comparison] || "No mínimo"} ${Number(item.target_value || 0).toLocaleString("pt-BR")} ${item.unit || ""}`.trim())}</td><td>${esc(cache.userById[item.default_owner_id]?.full_name || cache.userById[item.default_owner_id]?.name || "—")}</td><td class="act"><button class="rowbtn edit reg-template-edit" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Editar meta">✎</button></td></tr>`).join("");
-    root.innerHTML = registrationTemplateTable("meta", items.length, "Meta", "<th>Produto</th><th>Indicador</th><th>Valor-alvo</th><th>Responsável padrão</th>", rows, 6);
+    const activities = loadProductActivities();
+    const rows = items.map((item) => {
+      const dependencies = [
+        ...normalizeIdList(item.dependency_goal_template_ids).map((id) => items.find((goal) => goal.id === id)?.name),
+        ...normalizeIdList(item.dependency_activity_template_ids).map((id) => activities.find((activity) => activity.id === id)).filter(Boolean).map(activityDisplayName)
+      ].filter(Boolean).join(", ") || "—";
+      return `<tr><td><strong>${esc(item.name || "—")}</strong></td><td>${esc(registrationProductName(item.product_id))}</td><td>${esc(item.metric || "—")}</td><td>${esc(`${GOAL_COMPARISON_LABEL[item.comparison] || "No mínimo"} ${Number(item.target_value || 0).toLocaleString("pt-BR")} ${item.unit || ""}`.trim())}</td><td>${esc(dependencies)}</td><td>${esc(cache.userById[item.default_owner_id]?.full_name || cache.userById[item.default_owner_id]?.name || "—")}</td><td class="act"><button class="rowbtn edit reg-template-edit" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Editar meta">✎</button></td></tr>`;
+    }).join("");
+    root.innerHTML = registrationTemplateTable("meta", items.length, "Meta", "<th>Produto</th><th>Indicador</th><th>Valor-alvo</th><th>Depende de</th><th>Responsável padrão</th>", rows, 7);
   } else {
     const items = loadProductObjectives();
     const rows = items.map((item) => `<tr><td><strong>${esc(item.name || "—")}</strong></td><td>${esc(registrationProductName(item.product_id))}</td><td>${esc(item.completion_criteria || "—")}</td><td>${item.target_days == null ? "—" : `${esc(item.target_days)} dia(s)`}</td><td>${esc(cache.userById[item.default_owner_id]?.full_name || cache.userById[item.default_owner_id]?.name || "—")}</td><td class="act"><button class="rowbtn edit reg-template-edit" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Editar objetivo">✎</button></td></tr>`).join("");

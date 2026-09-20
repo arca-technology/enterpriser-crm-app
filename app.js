@@ -4625,7 +4625,7 @@ function openRegistrationsModal(section = "products") {
     ${currentUserIsAdmin() ? '<button class="foot-btn" disabled>LOG</button>' : ""}
     <button class="foot-btn" disabled>AJUDA</button>
     <button class="foot-btn" disabled>CADASTROS</button>
-    <button class="foot-btn" disabled>ARQUIVOS</button>
+    <button class="foot-btn" disabled>FERRAMENTAS</button>
     <button class="foot-btn" disabled>ATUALIZAÇÕES</button>
   </div>`;
   shell("Cadastros", `<div id="registrations-root" class="full-body registrations-root"></div>${disabledFooter}`, {
@@ -5347,19 +5347,221 @@ function currentUserIsAdmin() {
   return !isLive() || currentProfile?.role === "admin";
 }
 
-function openFilesModal() {
-  const canExport = state.tab !== "home";
-  sidePanel("Arquivos", `<div class="panel-list">
-    <button class="btn" id="footer-csv-active"${canExport ? "" : " disabled"}>CSV · Colunas ativas</button>
-    <button class="btn" id="footer-csv-all"${canExport ? "" : " disabled"}>CSV · Todas as colunas</button>
-    <button class="btn" id="footer-import-whatsapp">Importar conversa · TXT/ZIP</button>
-  </div>`, { closeOnOverlay: true });
-  document.getElementById("footer-csv-active")?.addEventListener("click", () => { closeModal(); exportTableCSV(true); });
-  document.getElementById("footer-csv-all")?.addEventListener("click", () => { closeModal(); exportTableCSV(false); });
-  document.getElementById("footer-import-whatsapp")?.addEventListener("click", () => {
-    closeModal();
-    document.getElementById("import-file").click();
+const TOOL_FOLDERS_KEY = "crm_tool_folders";
+const TOOL_EMAILS_KEY = "crm_tool_emails";
+let toolsState = { section: "files" };
+
+function readToolRows(key) {
+  try {
+    const rows = JSON.parse(localStorage.getItem(key) || "[]");
+    return Array.isArray(rows) ? rows : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveToolRows(key, rows) {
+  localStorage.setItem(key, JSON.stringify(rows));
+}
+
+function toolsDisabledFooter() {
+  return `<div class="registrations-footer" aria-disabled="true">
+    ${currentUserIsAdmin() ? '<button class="foot-btn" disabled>LOG</button>' : ""}
+    <button class="foot-btn" disabled>AJUDA</button>
+    <button class="foot-btn" disabled>CADASTROS</button>
+    <button class="foot-btn" disabled>FERRAMENTAS</button>
+    <button class="foot-btn" disabled>ATUALIZAÇÕES</button>
+  </div>`;
+}
+
+function openToolsModal(section = "files") {
+  toolsState.section = section;
+  const headerCenter = `<div class="modal-header-tabs" role="tablist" aria-label="Ferramentas">
+    <button class="modal-header-tab${section === "files" ? " active" : ""}" data-tools-tab="files" role="tab">Arquivos</button>
+    <button class="modal-header-tab${section === "emails" ? " active" : ""}" data-tools-tab="emails" role="tab">Emails</button>
+  </div>`;
+  shell("Ferramentas", `<div id="tools-root" class="tools-root"></div>${toolsDisabledFooter()}`, {
+    cls: "full registrations-modal",
+    headerCenter,
+    titleHtml: '<span class="registration-brand">ENTERPRISER <b>• CRM</b><em>Ferramentas</em></span>'
   });
+  document.querySelectorAll("[data-tools-tab]").forEach((button) => button.addEventListener("click", () => {
+    toolsState.section = button.dataset.toolsTab;
+    document.querySelectorAll("[data-tools-tab]").forEach((tab) => tab.classList.toggle("active", tab === button));
+    renderToolsSection();
+  }));
+  renderToolsSection();
+}
+
+function renderToolsSection() {
+  const root = document.getElementById("tools-root");
+  if (!root) return;
+  if (toolsState.section === "emails") renderToolEmails(root);
+  else renderToolFolders(root);
+}
+
+function renderToolFolders(root) {
+  const folders = readToolRows(TOOL_FOLDERS_KEY);
+  const cards = folders.length ? folders.map((folder) => `<article class="tool-folder">
+    <div class="tool-folder-icon" aria-hidden="true">📁</div>
+    <div class="tool-folder-main">
+      <div class="tool-folder-name">${esc(folder.name)}</div>
+      <div class="tool-folder-description">${esc(folder.description || folder.url || "Pasta")}</div>
+    </div>
+    <div class="tool-folder-actions">
+      ${folder.url ? `<button class="tool-icon-btn tool-folder-open" data-id="${esc(folder.id)}" title="Abrir pasta">↗</button>` : ""}
+      <button class="tool-icon-btn tool-folder-edit" data-id="${esc(folder.id)}" title="Editar pasta">✎</button>
+      <button class="tool-icon-btn tool-folder-delete" data-id="${esc(folder.id)}" title="Excluir pasta">×</button>
+    </div>
+  </article>`).join("") : '<div class="tool-empty">Nenhuma pasta cadastrada.</div>';
+  root.innerHTML = `<div class="tools-toolbar"><h4>Arquivos</h4><button class="btn primary" id="tool-folder-add">+ Nova pasta</button></div>
+    <div class="tool-folder-grid">${cards}</div>`;
+  document.getElementById("tool-folder-add").addEventListener("click", () => openToolFolderForm());
+  root.querySelectorAll(".tool-folder-open").forEach((button) => button.addEventListener("click", () => openToolFolder(button.dataset.id)));
+  root.querySelectorAll(".tool-folder-edit").forEach((button) => button.addEventListener("click", () => openToolFolderForm(button.dataset.id)));
+  root.querySelectorAll(".tool-folder-delete").forEach((button) => button.addEventListener("click", () => deleteToolFolder(button.dataset.id)));
+}
+
+function openToolFolder(id) {
+  const folder = readToolRows(TOOL_FOLDERS_KEY).find((item) => item.id === id);
+  if (!folder?.url) return;
+  try {
+    const url = new URL(folder.url);
+    if (!["http:", "https:"].includes(url.protocol)) throw new Error("invalid");
+    window.open(url.href, "_blank", "noopener,noreferrer");
+  } catch (e) {
+    toast("Link da pasta inválido.", true);
+  }
+}
+
+function openToolFolderForm(id = null) {
+  const current = readToolRows(TOOL_FOLDERS_KEY).find((item) => item.id === id) || {};
+  sidePanel(id ? "Editar pasta" : "Nova pasta", `<div class="form">
+    <div class="field full"><label>Nome da pasta</label><input id="tool-folder-name" value="${esc(current.name || "")}" autofocus></div>
+    <div class="field full"><label>Link da pasta</label><input id="tool-folder-url" type="url" value="${esc(current.url || "")}" placeholder="https://drive.google.com/..."></div>
+    <div class="field full"><label>Descrição</label><textarea id="tool-folder-description" rows="4">${esc(current.description || "")}</textarea></div>
+  </div><div class="modal-foot"><button class="btn" id="tool-folder-cancel">Cancelar</button><button class="btn primary" id="tool-folder-save">Salvar</button></div>`, {
+    closeOnOverlay: true,
+    onClose: () => openToolsModal("files")
+  });
+  document.getElementById("tool-folder-cancel").addEventListener("click", () => openToolsModal("files"));
+  document.getElementById("tool-folder-save").addEventListener("click", () => {
+    const name = document.getElementById("tool-folder-name").value.trim();
+    if (!name) { toast("Informe o nome da pasta.", true); return; }
+    const rows = readToolRows(TOOL_FOLDERS_KEY);
+    const item = {
+      id: current.id || crypto.randomUUID(),
+      name,
+      url: document.getElementById("tool-folder-url").value.trim(),
+      description: document.getElementById("tool-folder-description").value.trim(),
+      updated_at: new Date().toISOString()
+    };
+    const index = rows.findIndex((row) => row.id === item.id);
+    if (index >= 0) rows[index] = item;
+    else rows.unshift(item);
+    saveToolRows(TOOL_FOLDERS_KEY, rows);
+    toast("Pasta salva.");
+    openToolsModal("files");
+  });
+}
+
+function deleteToolFolder(id) {
+  const rows = readToolRows(TOOL_FOLDERS_KEY);
+  const folder = rows.find((item) => item.id === id);
+  if (!folder || !window.confirm(`Excluir a pasta "${folder.name}"?`)) return;
+  saveToolRows(TOOL_FOLDERS_KEY, rows.filter((item) => item.id !== id));
+  renderToolsSection();
+  toast("Pasta excluída.");
+}
+
+function renderToolEmails(root) {
+  const accounts = readToolRows(TOOL_EMAILS_KEY);
+  const rows = accounts.length ? accounts.map((account) => `<tr>
+    <td>${esc(account.cnpj || "—")}</td>
+    <td><strong>${esc(account.client || "—")}</strong></td>
+    <td>${esc(account.email || "—")}</td>
+    <td><span class="tool-secret"><span class="tool-secret-value" data-secret-id="${esc(account.id)}">••••••••</span><button class="tool-icon-btn tool-email-reveal" data-id="${esc(account.id)}" title="Mostrar senha">◉</button><button class="tool-icon-btn tool-email-copy" data-id="${esc(account.id)}" title="Copiar senha">⧉</button></span></td>
+    <td><span class="tool-row-actions"><button class="tool-icon-btn tool-email-edit" data-id="${esc(account.id)}" title="Editar">✎</button><button class="tool-icon-btn tool-email-delete" data-id="${esc(account.id)}" title="Excluir">×</button></span></td>
+  </tr>`).join("") : '<tr><td colspan="5" class="tool-empty">Nenhum e-mail cadastrado.</td></tr>';
+  root.innerHTML = `<div class="tools-toolbar"><h4>Emails</h4><button class="btn primary" id="tool-email-add">+ Novo e-mail</button></div>
+    <div class="table-wrap"><table><thead><tr><th>CNPJ</th><th>Cliente</th><th>Email</th><th>Senha</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  document.getElementById("tool-email-add").addEventListener("click", () => openToolEmailForm());
+  root.querySelectorAll(".tool-email-reveal").forEach((button) => button.addEventListener("click", () => toggleToolEmailSecret(button.dataset.id)));
+  root.querySelectorAll(".tool-email-copy").forEach((button) => button.addEventListener("click", () => copyToolEmailSecret(button.dataset.id)));
+  root.querySelectorAll(".tool-email-edit").forEach((button) => button.addEventListener("click", () => openToolEmailForm(button.dataset.id)));
+  root.querySelectorAll(".tool-email-delete").forEach((button) => button.addEventListener("click", () => deleteToolEmail(button.dataset.id)));
+}
+
+function openToolEmailForm(id = null) {
+  const current = readToolRows(TOOL_EMAILS_KEY).find((item) => item.id === id) || {};
+  sidePanel(id ? "Editar e-mail" : "Novo e-mail", `<div class="form">
+    <div class="field full"><label>CNPJ</label><input id="tool-email-cnpj" value="${esc(current.cnpj || "")}"></div>
+    <div class="field full"><label>Cliente</label><input id="tool-email-client" value="${esc(current.client || "")}"></div>
+    <div class="field full"><label>Email</label><input id="tool-email-address" type="email" value="${esc(current.email || "")}"></div>
+    <div class="field full"><label>Senha</label><input id="tool-email-password" type="password" value="${esc(current.password || "")}" autocomplete="new-password"></div>
+  </div><div class="modal-foot"><button class="btn" id="tool-email-cancel">Cancelar</button><button class="btn primary" id="tool-email-save">Salvar</button></div>`, {
+    closeOnOverlay: true,
+    onClose: () => openToolsModal("emails")
+  });
+  const cnpjInput = document.getElementById("tool-email-cnpj");
+  cnpjInput.addEventListener("blur", () => {
+    const digits = cnpjInput.value.replace(/\D/g, "");
+    const company = cache?.companies?.find((item) => String(item.tax_id || "").replace(/\D/g, "") === digits);
+    if (company && !document.getElementById("tool-email-client").value.trim()) {
+      document.getElementById("tool-email-client").value = company.trade_name || company.legal_name || "";
+    }
+  });
+  document.getElementById("tool-email-cancel").addEventListener("click", () => openToolsModal("emails"));
+  document.getElementById("tool-email-save").addEventListener("click", () => {
+    const client = document.getElementById("tool-email-client").value.trim();
+    const email = document.getElementById("tool-email-address").value.trim();
+    const password = document.getElementById("tool-email-password").value;
+    if (!client || !email || !password) { toast("Preencha cliente, email e senha.", true); return; }
+    const rows = readToolRows(TOOL_EMAILS_KEY);
+    const item = {
+      id: current.id || crypto.randomUUID(),
+      cnpj: document.getElementById("tool-email-cnpj").value.trim(),
+      client,
+      email,
+      password,
+      updated_at: new Date().toISOString()
+    };
+    const index = rows.findIndex((row) => row.id === item.id);
+    if (index >= 0) rows[index] = item;
+    else rows.unshift(item);
+    saveToolRows(TOOL_EMAILS_KEY, rows);
+    toast("E-mail salvo.");
+    openToolsModal("emails");
+  });
+}
+
+function toggleToolEmailSecret(id) {
+  const account = readToolRows(TOOL_EMAILS_KEY).find((item) => item.id === id);
+  const value = document.querySelector(`[data-secret-id="${CSS.escape(id)}"]`);
+  if (!account || !value) return;
+  const revealed = value.dataset.revealed === "true";
+  value.textContent = revealed ? "••••••••" : account.password;
+  value.dataset.revealed = String(!revealed);
+}
+
+async function copyToolEmailSecret(id) {
+  const account = readToolRows(TOOL_EMAILS_KEY).find((item) => item.id === id);
+  if (!account) return;
+  try {
+    await navigator.clipboard.writeText(account.password);
+    toast("Senha copiada.");
+  } catch (e) {
+    toast("Não foi possível copiar a senha.", true);
+  }
+}
+
+function deleteToolEmail(id) {
+  const rows = readToolRows(TOOL_EMAILS_KEY);
+  const account = rows.find((item) => item.id === id);
+  if (!account || !window.confirm(`Excluir o e-mail "${account.email}"?`)) return;
+  saveToolRows(TOOL_EMAILS_KEY, rows.filter((item) => item.id !== id));
+  renderToolsSection();
+  toast("E-mail excluído.");
 }
 
 function openUpdatesModal() {
@@ -5402,7 +5604,7 @@ function handleAction(action) {
   if (action === "settings") { openSettings(); return; }
   if (action === "help") { openHelpModal(); return; }
   if (action === "log") { openAdminLog(); return; }
-  if (action === "files") { openFilesModal(); return; }
+  if (action === "tools" || action === "files") { openToolsModal(); return; }
   if (action === "updates") { openUpdatesModal(); return; }
   if (action === "pipeline") { openPipelinesModal(); return; }
   if (action === "registrations") { openRegistrationsModal(); return; }

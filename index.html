@@ -30,12 +30,11 @@
     text-align:left;font:inherit;font-size:13px;font-weight:800;letter-spacing:.2px;white-space:nowrap}
   .brand-home span{color:var(--blue)}
   .brand-home:hover,.brand-home.active{color:var(--blue)}
-  nav{display:flex; gap:4px; margin:0 auto}
-  .tab{background:none; border:none; color:var(--muted); cursor:pointer;
-    padding:16px 15px 14px; font-size:12.5px; font-weight:600; letter-spacing:.4px;
-    border-bottom:2px solid transparent; text-transform:uppercase}
-  .tab:hover{color:var(--text)}
-  .tab.active{color:var(--text); border-bottom-color:var(--cyan)}
+  nav{display:flex;align-items:center;gap:5px;margin:0 auto;overflow-x:auto}
+  .tab{min-width:104px;height:32px;background:var(--panel2);border:1px solid var(--border);color:var(--muted);cursor:pointer;
+    padding:0 14px;border-radius:5px;font-size:11.5px;font-weight:700;letter-spacing:0;text-transform:uppercase;white-space:nowrap}
+  .tab:hover{color:var(--text);background:var(--row)}
+  .tab.active{color:#061313;background:var(--cyan);border-color:var(--cyan)}
 
   .actions{display:flex; align-items:center; justify-content:flex-end;gap:2px;min-width:190px}
   .ico{background:none; border:none; color:var(--muted); cursor:pointer; padding:7px;
@@ -331,11 +330,10 @@
   .modal.full{position:relative;overflow:hidden;width:100vw;max-width:none;height:100vh;max-height:none;border:0;border-radius:0;display:flex;flex-direction:column}
   .modal.full h3{flex:0 0 auto}
   .modal.full>h3{position:relative}
-  .modal-header-tabs{position:absolute;left:50%;top:0;transform:translateX(-50%);height:100%;display:flex;align-items:stretch;gap:24px}
-  .modal-header-tab{border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);padding:0 4px;font:inherit;font-size:11px;font-weight:700;letter-spacing:0;text-transform:uppercase;cursor:pointer}
-  .modal-header-tab:hover{color:var(--text)}
-  .modal-header-tab.active{color:var(--blue);border-bottom-color:var(--blue)}
-  .registrations-modal .modal-header-tab{font-size:12.5px;font-weight:600;letter-spacing:.4px}
+  .modal-header-tabs{position:absolute;left:50%;top:0;transform:translateX(-50%);height:100%;max-width:calc(100% - 420px);display:flex;align-items:center;gap:5px;overflow-x:auto}
+  .modal-header-tab{min-width:104px;height:32px;border:1px solid var(--border);border-radius:5px;background:var(--panel2);color:var(--muted);padding:0 14px;font:inherit;font-size:11.5px;font-weight:700;letter-spacing:0;text-transform:uppercase;white-space:nowrap;cursor:pointer}
+  .modal-header-tab:hover{color:var(--text);background:var(--row)}
+  .modal-header-tab.active{color:#061313;background:var(--cyan);border-color:var(--cyan)}
   .registration-brand{display:flex;align-items:center;gap:10px;white-space:nowrap;font-size:13px;font-weight:800}
   .registration-brand b{color:var(--blue);font:inherit}
   .registration-brand em{padding-left:10px;border-left:1px solid var(--border);color:var(--muted);font-size:12.5px;font-style:normal;font-weight:600}
@@ -346,6 +344,21 @@
   .registrations-modal .registrations-root{flex:1 1 auto}
   .registrations-footer{display:flex;align-items:center;justify-content:flex-end;gap:8px;height:39px;flex:0 0 39px;padding:0 16px;background:var(--panel);border-top:1px solid var(--border);opacity:.38;pointer-events:none}
   .registrations-footer .foot-btn{cursor:default}
+  .tools-root{min-height:0;flex:1 1 auto;padding:14px 16px 18px;overflow:auto}
+  .tools-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px}
+  .tools-toolbar h4{margin:0;font-size:12px;text-transform:uppercase;color:var(--muted);letter-spacing:.4px}
+  .tool-folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+  .tool-folder{display:flex;align-items:flex-start;gap:11px;min-height:76px;padding:13px;border:1px solid var(--border);border-radius:7px;background:var(--panel2)}
+  .tool-folder-icon{font-size:23px;line-height:1;flex:0 0 auto}
+  .tool-folder-main{min-width:0;flex:1}
+  .tool-folder-name{font-size:12.5px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tool-folder-description{margin-top:5px;color:var(--muted);font-size:11.5px;line-height:1.4}
+  .tool-folder-actions,.tool-row-actions{display:flex;gap:3px;flex:0 0 auto}
+  .tool-empty{padding:40px 18px;text-align:center;color:var(--muted)}
+  .tool-secret{display:inline-flex;align-items:center;gap:7px;min-width:130px}
+  .tool-secret-value{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:11.5px}
+  .tool-icon-btn{width:27px;height:27px;padding:0;border:1px solid var(--border);border-radius:5px;background:var(--panel2);color:var(--muted);cursor:pointer}
+  .tool-icon-btn:hover{color:var(--text);background:var(--row)}
   .registrations-root .product-activity-list td:first-child strong{color:var(--text)}
   .registrations-product{display:grid;gap:3px}
   .registrations-product small{color:var(--muted);font-size:10.5px}
@@ -523,7 +536,7 @@
     .brand-home{min-width:auto;font-size:11px}
     .actions{min-width:auto}
     nav{overflow-x:auto}
-    .tab{padding-left:9px;padding-right:9px;font-size:11px}
+    .tab,.modal-header-tab{min-width:96px;padding-left:10px;padding-right:10px;font-size:11px}
     .home-metrics{grid-template-columns:repeat(3,minmax(130px,1fr))}
     .home-grid{grid-template-columns:1fr}
     .data-table-wrap{height:calc(100% - 16px);margin:8px}
@@ -531,7 +544,7 @@
   }
   @media(max-width:700px){
     .modal.full>h3>.modal-title{display:none}
-    .modal-header-tabs{gap:10px}
+    .modal-header-tabs{max-width:calc(100% - 58px);gap:5px}
   }
   .form{padding:16px 18px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .form .full{grid-column:1 / -1}
@@ -654,7 +667,7 @@
       <button class="foot-btn" data-action="log" hidden>LOG</button>
       <button class="foot-btn" data-action="help">AJUDA</button>
       <button class="foot-btn" data-action="registrations">CADASTROS</button>
-      <button class="foot-btn" data-action="files">ARQUIVOS</button>
+      <button class="foot-btn" data-action="tools">FERRAMENTAS</button>
       <button class="foot-btn" data-action="updates">ATUALIZAÇÕES</button>
     </div>
   </footer>

@@ -2601,7 +2601,7 @@ const TASK_STATUS = [
   { id: "doing", label: "Em andamento" },
   { id: "done", label: "Concluído" }
 ];
-let projectBoardState = { projectId: null, view: "table", section: "activities", page: 1, pageSize: 50, calendarCursor: null };
+let projectBoardState = { projectId: null, view: "table", section: "activities", search: "", page: 1, pageSize: 50, calendarCursor: null };
 
 function userOptions(selected = "") {
   return ['<option value="">Sem responsável</option>']
@@ -2730,15 +2730,22 @@ function taskCardHtml(task) {
 function openProjectBoard(projectId) {
   const project = (cache.projects || []).find((p) => p.id === projectId);
   if (!project) return;
-  projectBoardState = { projectId, view: "table", section: "activities", page: 1, pageSize: 50, calendarCursor: null };
+  projectBoardState = { projectId, view: "table", section: "activities", search: "", page: 1, pageSize: 50, calendarCursor: null };
   const headerCenter = `<div class="modal-header-tabs" role="tablist" aria-label="Conteúdo da entrega">
     <button class="modal-header-tab active" data-project-section="activities" role="tab">Tarefas</button>
     <button class="modal-header-tab" data-project-section="objectives" role="tab">Objetivos</button>
     <button class="modal-header-tab" data-project-section="goals" role="tab">Metas</button>
   </div>`;
-  shell(`Entrega · ${project.name || project.id}`, `<div id="project-board-root" class="full-body"></div>`, { cls: "full", headerCenter });
+  shell(`Entrega · ${project.name || project.id}`, `<div id="project-board-root" class="full-body"></div>`, {
+    cls: "full registrations-modal",
+    headerCenter,
+    titleHtml: `<span class="registration-brand">ENTERPRISER <b>• CRM</b><em>Entrega · ${esc(project.name || project.id)}</em></span>`
+  });
   document.querySelectorAll("[data-project-section]").forEach((button) => button.addEventListener("click", () => {
     projectBoardState.section = button.dataset.projectSection;
+    projectBoardState.view = "table";
+    projectBoardState.search = "";
+    projectBoardState.page = 1;
     document.querySelectorAll("[data-project-section]").forEach((tab) => tab.classList.toggle("active", tab === button));
     renderProjectBoard(projectId);
   }));
@@ -2833,9 +2840,8 @@ function renderProjectTaskGantt(tasks) {
   return `<div class="gantt-view"><div class="gantt-board"><div class="gantt-head"><div>Tarefa</div><div>${esc(dt(isoDay(new Date(min))))} a ${esc(dt(isoDay(new Date(max))))}</div></div>${rows}</div></div>`;
 }
 
-function renderDeliveryObjectives(projectId, tasks) {
-  const objectives = loadDeliveryObjectives()
-    .filter((item) => item.project_id === projectId)
+function renderDeliveryObjectives(projectId, tasks, sourceRows = null) {
+  const objectives = (sourceRows || loadDeliveryObjectives().filter((item) => item.project_id === projectId))
     .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
   const rows = objectives.map((objective) => {
     const linked = tasks.filter((task) => task.objective_id === objective.id);
@@ -2906,8 +2912,8 @@ function deliveryGoalDependencyLabel(goal) {
   return names.join(", ") || "—";
 }
 
-function renderDeliveryGoals(projectId) {
-  const goals = loadDeliveryGoals().filter((item) => item.project_id === projectId)
+function renderDeliveryGoals(projectId, sourceRows = null) {
+  const goals = (sourceRows || loadDeliveryGoals().filter((item) => item.project_id === projectId))
     .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
   const rows = goals.map((goal) => {
     const current = Number(goal.current_value || 0);
@@ -2946,57 +2952,93 @@ function renderTaskDashboard(tasks) {
   </div>`;
 }
 
+function renderDeliveryStatusMatrix(rows, kind, tasks = []) {
+  return `<div class="task-columns">${TASK_STATUS.map((status) => {
+    const items = rows.filter((item) => (item.status || "todo") === status.id);
+    const cards = items.map((item) => {
+      if (kind === "objectives") {
+        const linked = tasks.filter((task) => task.objective_id === item.id);
+        const done = linked.filter((task) => task.status === "done").length;
+        return `<article class="task-card"><strong>${esc(item.name || "Objetivo")}</strong><span class="muted">${esc(item.completion_criteria || "Sem critério")}</span><span>${done}/${linked.length} tarefa(s)</span></article>`;
+      }
+      return `<article class="task-card"><strong>${esc(item.name || "Meta")}</strong><span class="muted">${esc(item.metric || "Sem indicador")}</span><span>${Number(item.current_value || 0).toLocaleString("pt-BR")} / ${Number(item.target_value || 0).toLocaleString("pt-BR")} ${esc(item.unit || "")}</span></article>`;
+    }).join("");
+    return `<section class="task-col"><h4>${status.label}<span>${items.length}</span></h4><div class="task-list">${cards || '<div class="empty" style="padding:22px 8px">Sem itens.</div>'}</div></section>`;
+  }).join("")}</div>`;
+}
+
+function renderDeliverySectionDashboard(rows, kind, tasks = []) {
+  const done = rows.filter((item) => item.status === "done").length;
+  const doing = rows.filter((item) => item.status === "doing").length;
+  const blocked = rows.filter((item) => kind === "objectives" ? deliveryObjectiveDependencyState(item).blocked : deliveryGoalDependencyState(item).blocked).length;
+  const overdue = rows.filter((item) => item.due_date && item.status !== "done" && item.due_date < new Date().toISOString().slice(0, 10)).length;
+  const linked = kind === "objectives" ? tasks.filter((task) => rows.some((item) => item.id === task.objective_id)).length : 0;
+  return `<div class="project-dashboard">
+    <div class="metric"><div class="k">${kind === "objectives" ? "Objetivos" : "Metas"}</div><div class="v">${rows.length}</div></div>
+    <div class="metric"><div class="k">Em andamento</div><div class="v">${doing}</div></div>
+    <div class="metric"><div class="k">Concluídos</div><div class="v">${done}</div></div>
+    <div class="metric"><div class="k">Bloqueados</div><div class="v">${blocked}</div></div>
+    <div class="metric"><div class="k">Atrasados</div><div class="v">${overdue}</div></div>
+    ${kind === "objectives" ? `<div class="metric"><div class="k">Tarefas vinculadas</div><div class="v">${linked}</div></div>` : ""}
+  </div>`;
+}
+
+function projectSectionRows(projectId, section = projectBoardState.section) {
+  if (section === "objectives") return loadDeliveryObjectives().filter((item) => item.project_id === projectId);
+  if (section === "goals") return loadDeliveryGoals().filter((item) => item.project_id === projectId);
+  return projectTasks(projectId);
+}
+
+function filterProjectSectionRows(rows) {
+  const query = String(projectBoardState.search || "").trim().toLocaleLowerCase("pt-BR");
+  if (!query) return rows;
+  return rows.filter((item) => {
+    const values = Object.values(item).flatMap((value) => Array.isArray(value) ? value : [value]);
+    if (values.some((value) => String(value ?? "").toLocaleLowerCase("pt-BR").includes(query))) return true;
+    return projectBoardState.section === "activities" && activityDisplayName(item).toLocaleLowerCase("pt-BR").includes(query);
+  });
+}
+
+function projectToolbarHtml(client, product, total) {
+  const sectionLabel = projectBoardState.section === "activities" ? "tarefa(s)" : projectBoardState.section === "objectives" ? "objetivo(s)" : "meta(s)";
+  return `<div class="project-head project-data-toolbar">
+    <div class="registration-toolbar-left"><div class="project-meta"><span>${esc(client)}</span><span>·</span><span>${esc(product)}</span><span>·</span><span>${total} ${sectionLabel}</span></div></div>
+    <div class="registration-toolbar-center"><input class="search registration-toolbar-search" id="project-search" placeholder="Buscar..." value="${esc(projectBoardState.search || "")}">${projectBoardState.section === "activities" ? '<button class="btn primary plus" id="project-add-task" title="Adicionar tarefa">+</button>' : ""}</div>
+    <div class="registration-toolbar-right"><button class="btn project-cols-btn" type="button" title="Selecionar colunas"${projectBoardState.view === "table" ? "" : " disabled"}>⊞</button>
+      <button class="view project-mode${projectBoardState.view === "table" ? " active" : ""}" data-project-mode="table">Tabela</button>
+      <button class="view project-mode${projectBoardState.view === "matrix" ? " active" : ""}" data-project-mode="matrix">Matriz</button>
+      <button class="view project-mode${projectBoardState.view === "dashboard" ? " active" : ""}" data-project-mode="dashboard">Dashboard</button>
+    </div>
+  </div>`;
+}
+
 function renderProjectBoard(projectId) {
   const root = document.getElementById("project-board-root");
   const project = (cache.projects || []).find((p) => p.id === projectId);
   if (!root || !project) return;
-  const tasks = projectTasks(projectId);
+  const allTasks = projectTasks(projectId);
+  const allRows = projectSectionRows(projectId);
+  const rows = filterProjectSectionRows(allRows);
   const client = cache.companyById[project.company_id]?.legal_name || "Sem cliente";
   const product = cache.productById[project.product_id]?.name || "Sem produto";
-  const total = tasks.length;
-  const done = tasks.filter((t) => t.status === "done").length;
-  if (projectBoardState.section === "goals") {
-    const goalCount = loadDeliveryGoals().filter((item) => item.project_id === projectId).length;
-    root.innerHTML = `<div class="project-board">
-      <div class="project-head"><div class="project-meta"><span>${esc(client)}</span><span>·</span><span>${esc(product)}</span><span>·</span><span>${goalCount} meta(s)</span></div></div>
-      ${renderDeliveryGoals(projectId)}
-    </div>`;
-    wireDeliveryGoals(projectId);
-    return;
-  }
-  if (projectBoardState.section === "objectives") {
-    const objectiveCount = loadDeliveryObjectives().filter((item) => item.project_id === projectId).length;
-    root.innerHTML = `<div class="project-board">
-      <div class="project-head"><div class="project-meta"><span>${esc(client)}</span><span>·</span><span>${esc(product)}</span><span>·</span><span>${objectiveCount} objetivo(s)</span></div></div>
-      ${renderDeliveryObjectives(projectId, tasks)}
-    </div>`;
-    wireDeliveryObjectives(projectId);
-    return;
-  }
   const view = projectBoardState.view || "table";
-  const body = view === "table" ? renderTaskTable(tasks)
-    : view === "kanban" ? renderTaskMatrix(tasks)
-    : view === "calendar" ? renderProjectTaskCalendar(tasks)
-    : renderProjectTaskGantt(tasks);
-  const viewLabel = VIEW_MODES.find((mode) => mode.id === view)?.label || "Tabela";
-  root.innerHTML = `<div class="project-board">
-    <div class="project-head">
-      <div>
-        <div class="project-meta">
-          <span>${esc(client)}</span>
-          <span>·</span>
-          <span>${esc(product)}</span>
-          <span>·</span>
-          <span>${total} tarefa(s), ${done} concluída(s)</span>
-        </div>
-      </div>
-      <div class="project-toolbar">
-        <button class="btn view-menu-trigger active" id="project-view-menu-btn"><span>${esc(viewLabel.toLocaleUpperCase("pt-BR"))}</span><span class="chevron">▾</span></button>
-        <button class="btn primary plus" id="project-add-task" title="Adicionar tarefa">+</button>
-      </div>
-    </div>
-    ${body}
-  </div>`;
+  let body = "";
+  if (projectBoardState.section === "activities") {
+    body = view === "table" ? renderTaskTable(rows) : view === "matrix" ? renderTaskMatrix(rows) : renderTaskDashboard(rows);
+  } else if (projectBoardState.section === "objectives") {
+    body = view === "table" ? renderDeliveryObjectives(projectId, allTasks, rows)
+      : view === "matrix" ? renderDeliveryStatusMatrix(rows, "objectives", allTasks)
+      : renderDeliverySectionDashboard(rows, "objectives", allTasks);
+  } else {
+    body = view === "table" ? renderDeliveryGoals(projectId, rows)
+      : view === "matrix" ? renderDeliveryStatusMatrix(rows, "goals")
+      : renderDeliverySectionDashboard(rows, "goals");
+  }
+  root.innerHTML = `<div class="project-board">${projectToolbarHtml(client, product, rows.length)}${body}</div>`;
+  const table = root.querySelector("table");
+  if (table && view === "table") wireProjectTableColumns(table);
+  if (projectBoardState.section === "objectives" && view === "table") wireDeliveryObjectives(projectId);
+  if (projectBoardState.section === "goals" && view === "table") wireDeliveryGoals(projectId);
   wireProjectBoard(projectId);
 }
 
@@ -3333,8 +3375,86 @@ function openDeliveryTaskDrawer(projectId, editId = null) {
   document.getElementById("project-task-title").focus();
 }
 
+function projectTableRows(table) {
+  return [...table.querySelectorAll("tbody tr")].filter((row) => row.children.length > 1 && !row.querySelector(".empty"));
+}
+
+function projectTableDefinitions(table) {
+  return [...table.querySelectorAll("thead th[data-project-column]")]
+    .map((header) => ({ k: header.dataset.projectColumn, h: header.dataset.projectLabel }))
+    .sort((a, b) => Number(a.k.slice(1)) - Number(b.k.slice(1)));
+}
+
+function applyProjectTableColumnPreferences(table) {
+  const scope = `delivery:${projectBoardState.section}`;
+  const prefs = secondaryColumnPrefs(scope);
+  const definitions = projectTableDefinitions(table);
+  const ordered = orderedColumnDefinitions(definitions, prefs);
+  const headRow = table.tHead?.rows?.[0];
+  if (!headRow) return;
+  const headers = Object.fromEntries([...headRow.cells].filter((cell) => cell.dataset.projectColumn).map((cell) => [cell.dataset.projectColumn, cell]));
+  const fixedHeaders = [...headRow.cells].filter((cell) => !cell.dataset.projectColumn);
+  ordered.forEach((col) => headRow.appendChild(headers[col.k]));
+  fixedHeaders.forEach((cell) => headRow.appendChild(cell));
+  projectTableRows(table).forEach((row) => {
+    const cells = Object.fromEntries([...row.cells].filter((cell) => cell.dataset.projectColumn).map((cell) => [cell.dataset.projectColumn, cell]));
+    const fixedCells = [...row.cells].filter((cell) => !cell.dataset.projectColumn);
+    ordered.forEach((col) => { if (cells[col.k]) row.appendChild(cells[col.k]); });
+    fixedCells.forEach((cell) => row.appendChild(cell));
+  });
+  ordered.forEach((col) => {
+    const visible = prefs[col.k] !== false;
+    headers[col.k].hidden = !visible;
+    projectTableRows(table).forEach((row) => {
+      const cell = row.querySelector(`td[data-project-column="${CSS.escape(col.k)}"]`);
+      if (cell) cell.hidden = !visible;
+    });
+  });
+}
+
+function wireProjectTableColumns(table) {
+  const headers = [...table.querySelectorAll("thead th")];
+  headers.forEach((header, index) => {
+    if (header.textContent.trim().toLocaleUpperCase("pt-BR") === "AÇÕES") return;
+    const key = `d${index}`;
+    header.dataset.projectColumn = key;
+    header.dataset.projectLabel = header.textContent.trim();
+    projectTableRows(table).forEach((row) => {
+      const cell = row.children[index];
+      if (cell) cell.dataset.projectColumn = key;
+    });
+  });
+  applyProjectTableColumnPreferences(table);
+}
+
+function openProjectColumnManager(table) {
+  openSecondaryColumnManager({
+    scope: `delivery:${projectBoardState.section}`,
+    label: projectBoardState.section === "activities" ? "Tarefas da entrega" : projectBoardState.section === "objectives" ? "Objetivos da entrega" : "Metas da entrega",
+    definitions: projectTableDefinitions(table),
+    onChange: () => applyProjectTableColumnPreferences(table)
+  });
+}
+
 function wireProjectBoard(projectId) {
-  document.getElementById("project-view-menu-btn")?.addEventListener("click", openProjectViewMenu);
+  document.getElementById("project-search")?.addEventListener("input", (event) => {
+    projectBoardState.search = event.target.value;
+    projectBoardState.page = 1;
+    renderProjectBoard(projectId);
+    const input = document.getElementById("project-search");
+    input?.focus();
+    input?.setSelectionRange(input.value.length, input.value.length);
+  });
+  document.querySelectorAll(".project-mode").forEach((button) => button.addEventListener("click", () => {
+    projectBoardState.view = button.dataset.projectMode;
+    projectBoardState.page = 1;
+    renderProjectBoard(projectId);
+  }));
+  document.querySelector(".project-cols-btn")?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const table = document.querySelector("#project-board-root table");
+    if (table) openProjectColumnManager(table);
+  });
   document.getElementById("project-add-task")?.addEventListener("click", () => openDeliveryTaskDrawer(projectId));
   document.getElementById("project-page-prev")?.addEventListener("click", () => { projectBoardState.page -= 1; renderProjectBoard(projectId); });
   document.getElementById("project-page-next")?.addEventListener("click", () => { projectBoardState.page += 1; renderProjectBoard(projectId); });
@@ -3757,7 +3877,7 @@ function openSecondaryColumnManager({ scope, label, definitions, onChange }) {
   });
   setTimeout(() => {
     const outside = (event) => {
-      if (!panel.contains(event.target) && !event.target.closest(".registration-cols-btn,.tools-cols-btn")) {
+      if (!panel.contains(event.target) && !event.target.closest(".registration-cols-btn,.tools-cols-btn,.project-cols-btn")) {
         panel.remove();
         document.removeEventListener("mousedown", outside);
       }

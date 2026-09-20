@@ -143,8 +143,8 @@
   .chat-msg .meta{font-size:10.5px;color:var(--muted);margin-bottom:4px}
   .chat-msg .txt{white-space:pre-wrap;line-height:1.35}
   .project-board{flex:1;display:flex;flex-direction:column;min-height:0}
-  .project-head{display:flex;align-items:center;justify-content:space-between;gap:12px;
-    padding:12px 18px;border-bottom:1px solid var(--border2);flex:0 0 auto}
+  .project-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,500px) minmax(0,1fr);align-items:center;gap:10px;
+    height:40px;box-sizing:border-box;padding:4px 9px;border-bottom:1px solid var(--border2);flex:0 0 40px}
   .project-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;color:var(--muted);font-size:12px}
   .project-toolbar{display:flex;align-items:center;gap:6px;flex:0 0 auto}
   .project-toolbar .view-menu-trigger{width:126px}
@@ -384,13 +384,13 @@
   .registration-filter-badge b{font-size:13px;color:#b9d9ff}
   body.light .registration-filter-badge{border-color:#8bb8ee;background:#e2efff;color:#174f96}
   body.light .registration-filter-badge b{color:#2765ad}
-  .modal-toolbar.registration-toolbar,.tools-toolbar{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,500px) minmax(0,1fr);align-items:center;gap:10px;height:40px;box-sizing:border-box;padding:4px 9px;border-bottom:1px solid var(--border2);flex:0 0 40px}
+  .modal-toolbar.registration-toolbar,.tools-toolbar,.project-data-toolbar{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,500px) minmax(0,1fr);align-items:center;gap:10px;height:40px;box-sizing:border-box;padding:4px 9px;border-bottom:1px solid var(--border2);flex:0 0 40px}
   .registration-toolbar-left,.registration-toolbar-center,.registration-toolbar-right{display:flex;align-items:center;gap:8px;min-width:0}
   .registration-toolbar-center{position:relative;justify-content:center}
   .registration-toolbar-right{justify-content:flex-end}
   .registration-toolbar-search{width:431px;max-width:calc(100% - 60px)}
   .registration-toolbar-center .plus{position:absolute;left:calc(50% + 223.5px)}
-  .registration-cols-btn,.tools-cols-btn{width:38px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:0 0 38px}
+  .registration-cols-btn,.tools-cols-btn,.project-cols-btn{width:38px;height:30px;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:0 0 38px}
   .tools-table-wrap{flex:1 1 auto;min-height:0;overflow:auto}
   .registrations-root .rowbtn,.product-activity-list .rowbtn{width:32px;height:30px;padding:4px;font-size:16px;display:inline-flex;align-items:center;justify-content:center}
   .registrations-root .rowbtn.edit,.registrations-root .reg-pipeline-edit,.registrations-root .reg-user-edit{color:#3478e5}
@@ -560,6 +560,7 @@
     .registration-toolbar-center{gap:8px}
     .registration-toolbar-center .plus{position:static}
     .registration-toolbar-search{width:100%;max-width:420px}
+    .project-head{grid-template-columns:1fr}
     .tab,.modal-header-tab{min-width:96px;padding-left:10px;padding-right:10px;font-size:11px}
     .home-metrics{grid-template-columns:repeat(3,minmax(130px,1fr))}
     .home-grid{grid-template-columns:1fr}

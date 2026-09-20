@@ -101,12 +101,16 @@
   .view-option.active{color:var(--blue);background:var(--panel2);font-weight:700}
   .view-option:disabled{color:var(--muted2);opacity:.55;cursor:not-allowed}
   .view-option-icon{color:var(--muted);text-align:center}
-  .filter-badges{display:flex;align-items:center;gap:5px;min-width:0;max-width:360px;overflow-x:auto}
-  .filter-badge{display:inline-flex;align-items:center;gap:6px;max-width:180px;border:1px solid #8bb8ee;background:#e2efff;color:#174f96;border-radius:5px;padding:5px 7px;font-size:10.5px;font-weight:700;white-space:nowrap;cursor:pointer}
+  .filter-strip{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:28px;height:28px;flex:0 0 28px;padding:3px 9px;background:var(--bg);border-bottom:1px solid var(--border2)}
+  .filter-strip.home-hidden{display:none}
+  .filter-badges{display:flex;align-items:center;gap:5px;min-width:0;flex:1 1 auto;overflow-x:auto}
+  .filter-badge{display:inline-flex;align-items:center;gap:5px;max-width:220px;border:1px solid #168f98;background:#063b42;color:#5ce6ed;border-radius:4px;padding:3px 6px;font-size:9.5px;font-weight:700;white-space:nowrap;cursor:pointer}
   .filter-badge span:first-child{overflow:hidden;text-overflow:ellipsis}
-  .filter-badge .x{font-size:13px;line-height:1;color:#2765ad}
-  body:not(.light) .filter-badge{border-color:#275a8d;background:#102c4e;color:#8fc5ff}
-  body:not(.light) .filter-badge .x{color:#b9d9ff}
+  .filter-badge .x{font-size:12px;line-height:1;color:currentColor}
+  .filter-clear-all{display:inline-flex;align-items:center;gap:4px;flex:0 0 auto;border:0;background:transparent;color:var(--muted);padding:3px 5px;font:inherit;font-size:10.5px;font-weight:650;cursor:pointer}
+  .filter-clear-all:hover{color:var(--text)}
+  .filter-clear-all[hidden]{display:none}
+  body.light .filter-badge{border-color:#57aab1;background:#d8f5f6;color:#12636a}
   .dd-menu-btn{display:block;width:100%;text-align:left;background:none;border:none;color:var(--text);
     padding:9px 12px;font-size:12px;cursor:pointer}
   .dd-menu-btn:hover{background:var(--row)}

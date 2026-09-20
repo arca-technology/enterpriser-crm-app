@@ -3423,10 +3423,20 @@ function renderActiveFilterBadges() {
   if (!root) return;
   const filters = tabFilters();
   const cols = columns(state.tab, cache);
-  const active = Object.entries(filters).filter(([, values]) => values?.size);
+  const orderedKeys = cols.map((col) => col.k);
+  const active = [
+    ...orderedKeys.map((key) => [key, filters[key]]),
+    ...Object.entries(filters).filter(([key]) => !orderedKeys.includes(key))
+  ].filter(([, values]) => values?.size);
   root.innerHTML = active.map(([key, values]) => {
-    const label = cols.find((col) => col.k === key)?.h || key;
-    return `<button class="filter-badge" data-key="${esc(key)}" title="Remover filtro de ${esc(label)}"><span>${esc(label)} · ${values.size}</span><span class="x">×</span></button>`;
+    const col = cols.find((item) => item.k === key);
+    const label = col?.h || key;
+    const selected = [...values];
+    const sample = (cache[state.tab] || []).find((row) => String(row[key] ?? "") === selected[0]) || {};
+    const valueLabel = selected.length === 1
+      ? (selected[0] === "" ? "(em branco)" : col ? displayValue(sample, col, cache) : selected[0])
+      : `${selected.length} selecionados`;
+    return `<button class="filter-badge" data-key="${esc(key)}" title="Remover filtro de ${esc(label)}"><span>${esc(label)}: ${esc(valueLabel)}</span><span class="x">×</span></button>`;
   }).join("");
   root.querySelectorAll(".filter-badge").forEach((badge) => badge.addEventListener("click", () => {
     delete filters[badge.dataset.key];
@@ -3434,6 +3444,14 @@ function renderActiveFilterBadges() {
     closeFloaters();
     render();
   }));
+  const clearAll = document.getElementById("filter-clear-all");
+  clearAll.hidden = active.length < 2;
+  clearAll.onclick = active.length < 2 ? null : () => {
+    state.filters[state.tab] = {};
+    if (state.pages[state.tab]) state.pages[state.tab] = 1;
+    closeFloaters();
+    render();
+  };
 }
 
 function openColumnFilter(th, key) {
@@ -3882,7 +3900,7 @@ function render() {
   document.getElementById("new").disabled = isHome;
   document.getElementById("cols-btn").disabled = isHome;
   document.getElementById("data-btn").disabled = isHome;
-  document.getElementById("filter-badges").hidden = isHome;
+  document.getElementById("filter-strip").classList.toggle("home-hidden", isHome);
   if (!isHome) renderActiveFilterBadges();
 
   if (isHome) renderHome(cache);

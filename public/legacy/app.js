@@ -337,6 +337,38 @@ async function deleteRow(table, id) {
   return api(`${remoteTable(table)}?${k}=eq.${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
+async function emailAccountsRequest(method = "GET", body = null) {
+  if (APP_VARIANT !== "web" || !isLive()) throw new Error("A criação automática de e-mail está disponível na versão web conectada.");
+  const token = await getAccessToken();
+  if (!token) throw new Error("Sua sessão expirou. Entre novamente.");
+  const response = await fetch("/api/email-accounts", {
+    method,
+    headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Falha ao acessar os e-mails (${response.status})`);
+  return data;
+}
+
+async function provisionDeliveryEmail(project, { notify = true } = {}) {
+  if (APP_VARIANT !== "web" || !isLive() || !project?.id) return null;
+  try {
+    const result = await emailAccountsRequest("POST", { deliveryId: project.id });
+    remoteToolEmailsLoaded = true;
+    if (result.account) {
+      const index = remoteToolEmails.findIndex((account) => account.id === result.account.id);
+      if (index >= 0) remoteToolEmails[index] = result.account;
+      else remoteToolEmails.unshift(result.account);
+    }
+    if (notify) toast(result.status === "created" ? `E-mail ${result.account.email} criado na HostGator.` : `E-mail ${result.account.email} já estava criado.`);
+    return result.account;
+  } catch (err) {
+    if (notify) toast("Entrega salva, mas o e-mail não foi criado · " + err.message, true);
+    return null;
+  }
+}
+
 // ---------- Cache ----------
 let cache = null;
 function loadConversations() {
@@ -1116,7 +1148,7 @@ async function createProjectFromDeal(deal) {
   const clientName = contact?.name || company?.trade_name || company?.legal_name || "Sem cliente";
   const name = deliveryGeneratedName(clientName, deal.product_id);
   try {
-    await createRow("projects", {
+    const savedProject = await createRow("projects", {
       name: name || deal.title || "Entrega",
       delivery_type: deliveryTypeForProduct(product),
       group_name: null,
@@ -1131,6 +1163,7 @@ async function createProjectFromDeal(deal) {
       end_date: end
     });
     toast("Entrega criada automaticamente a partir do negócio ganho.");
+    await provisionDeliveryEmail(savedProject);
   } catch (err) {
     toast("Erro ao criar entrega automática · " + err.message, true);
   }
@@ -4526,6 +4559,7 @@ async function saveForm(tab, id, fs, opts = {}) {
       const dealId = id || saved?.id;
       if (dealId) await createProjectFromDeal({ id: dealId, company_id: body.company_id, contact_id: body.contact_id, product_id: body.product_id, title: body.title });
     }
+    if (tab === "projects" && !id && saved?.id) await provisionDeliveryEmail(saved);
     await init();
     if (opts.returnToRegistrations && document.getElementById("registrations-root")) {
       opts.closeAction?.();
@@ -4676,9 +4710,9 @@ function helpContentHtml() {
 
     <section class="help-section" id="help-tools"><h4>Ferramentas</h4><ul>
       <li><b>Arquivos:</b> catálogo de atalhos para pastas, como links do Google Drive, com nome e descrição. O CRM guarda o link, não copia os arquivos.</li>
-      <li><b>E-mails:</b> cadastro de CNPJ, cliente, endereço de e-mail e senha, com ações para revelar e copiar. Ao informar um CNPJ conhecido, o cliente pode ser preenchido automaticamente.</li>
+      <li><b>E-mails:</b> ao criar uma entrega, o CRM cria automaticamente na HostGator uma conta formada pela raiz do CNPJ em <b>@ecommerce365.com.br</b>. A senha pode ser revelada ou copiada nesta tela.</li>
       <li>Busca e seleção de colunas funcionam nas duas abas.</li>
-    </ul><p class="help-note"><b>Atenção:</b> Arquivos e E-mails são salvos somente no armazenamento deste navegador. As senhas ficam locais e não são sincronizadas com o Supabase; use esse recurso apenas em dispositivo confiável.</p></section>
+    </ul><p class="help-note"><b>Segurança:</b> as credenciais de e-mail são compartilhadas entre os usuários ativos do CRM e a senha permanece criptografada no Supabase. Os links de Arquivos continuam salvos somente neste navegador.</p></section>
 
     <section class="help-section" id="help-admin"><h4>Administração e suporte</h4><ul>
       <li><b>LOG:</b> administradores consultam as alterações recentes registradas nas principais entidades.</li>
@@ -5801,6 +5835,10 @@ const TOOL_COLUMN_DEFS = {
   emails: [{ k: "cnpj", h: "CNPJ" }, { k: "client", h: "Cliente" }, { k: "email", h: "Email" }, { k: "password", h: "Senha" }]
 };
 let toolsState = { section: "files", search: "" };
+let remoteToolEmails = [];
+let remoteToolEmailsLoaded = false;
+let remoteToolEmailsLoading = false;
+let remoteToolEmailsError = "";
 
 function readToolRows(key) {
   try {
@@ -5964,8 +6002,31 @@ function deleteToolFolder(id) {
   toast("Pasta excluída.");
 }
 
+function toolEmailRows() {
+  return APP_VARIANT === "web" && isLive() ? remoteToolEmails : readToolRows(TOOL_EMAILS_KEY);
+}
+
+async function loadRemoteToolEmails() {
+  if (APP_VARIANT !== "web" || !isLive() || remoteToolEmailsLoading) return;
+  remoteToolEmailsLoading = true;
+  remoteToolEmailsError = "";
+  try {
+    const result = await emailAccountsRequest();
+    remoteToolEmails = Array.isArray(result.accounts) ? result.accounts : [];
+    remoteToolEmailsLoaded = true;
+  } catch (err) {
+    remoteToolEmailsError = err.message;
+  } finally {
+    remoteToolEmailsLoading = false;
+    const root = document.getElementById("tools-root");
+    if (root && toolsState.section === "emails") renderToolEmails(root);
+  }
+}
+
 function renderToolEmails(root) {
-  const allAccounts = readToolRows(TOOL_EMAILS_KEY);
+  const usesServer = APP_VARIANT === "web" && isLive();
+  if (usesServer && !remoteToolEmailsLoaded && !remoteToolEmailsLoading && !remoteToolEmailsError) loadRemoteToolEmails();
+  const allAccounts = toolEmailRows();
   const query = toolsState.search.trim().toLocaleLowerCase("pt-BR");
   const accounts = allAccounts.filter((account) => !query || [account.cnpj, account.client, account.email].some((value) => String(value || "").toLocaleLowerCase("pt-BR").includes(query)));
   const columns = visibleToolColumns("emails");
@@ -5975,9 +6036,11 @@ function renderToolEmails(root) {
       if (col.k === "password") return `<td><span class="tool-secret"><span class="tool-secret-value" data-secret-id="${esc(account.id)}">••••••••</span><button class="tool-icon-btn tool-email-reveal" data-id="${esc(account.id)}" title="Mostrar senha">◉</button><button class="tool-icon-btn tool-email-copy" data-id="${esc(account.id)}" title="Copiar senha">⧉</button></span></td>`;
       return `<td>${esc(account[col.k] || "—")}</td>`;
     }).join("")}
-    <td><span class="tool-row-actions"><button class="tool-icon-btn tool-email-edit" data-id="${esc(account.id)}" title="Editar">✎</button><button class="tool-icon-btn tool-email-delete" data-id="${esc(account.id)}" title="Excluir">×</button></span></td>
+    <td>${usesServer ? "—" : `<span class="tool-row-actions"><button class="tool-icon-btn tool-email-edit" data-id="${esc(account.id)}" title="Editar">✎</button><button class="tool-icon-btn tool-email-delete" data-id="${esc(account.id)}" title="Excluir">×</button></span>`}</td>
   </tr>`).join("") : `<tr><td colspan="${columns.length + 1}" class="tool-empty">Nenhum e-mail cadastrado.</td></tr>`;
-  root.innerHTML = `${toolsToolbarHtml(accounts.length, "Adicionar e-mail", "tool-email-add")}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th>${esc(col.h)}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const feedback = usesServer && remoteToolEmailsLoading ? '<div class="tool-empty">Carregando e-mails...</div>'
+    : usesServer && remoteToolEmailsError ? `<div class="tool-empty">Não foi possível carregar os e-mails: ${esc(remoteToolEmailsError)}</div>` : "";
+  root.innerHTML = `${toolsToolbarHtml(accounts.length, "Criar e-mail pelo CNPJ", "tool-email-add")}${feedback}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th>${esc(col.h)}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   wireToolsToolbar(root);
   document.getElementById("tool-email-add").addEventListener("click", () => openToolEmailForm());
   root.querySelectorAll(".tool-email-reveal").forEach((button) => button.addEventListener("click", () => toggleToolEmailSecret(button.dataset.id)));
@@ -5987,13 +6050,14 @@ function renderToolEmails(root) {
 }
 
 function openToolEmailForm(id = null) {
-  const current = readToolRows(TOOL_EMAILS_KEY).find((item) => item.id === id) || {};
+  const usesServer = APP_VARIANT === "web" && isLive();
+  const current = toolEmailRows().find((item) => item.id === id) || {};
+  if (usesServer && id) return;
   sidePanel(id ? "Editar e-mail" : "Novo e-mail", `<div class="form">
     <div class="field full"><label>CNPJ</label><input id="tool-email-cnpj" value="${esc(current.cnpj || "")}"></div>
     <div class="field full"><label>Cliente</label><input id="tool-email-client" value="${esc(current.client || "")}"></div>
-    <div class="field full"><label>Email</label><input id="tool-email-address" type="email" value="${esc(current.email || "")}"></div>
-    <div class="field full"><label>Senha</label><input id="tool-email-password" type="password" value="${esc(current.password || "")}" autocomplete="new-password"></div>
-  </div><div class="modal-foot"><button class="btn" id="tool-email-cancel">Cancelar</button><button class="btn primary" id="tool-email-save">Salvar</button></div>`, {
+    ${usesServer ? '<div class="field full"><span class="muted">O endereço usará a raiz do CNPJ e a senha será gerada automaticamente.</span></div>' : `<div class="field full"><label>Email</label><input id="tool-email-address" type="email" value="${esc(current.email || "")}"></div><div class="field full"><label>Senha</label><input id="tool-email-password" type="password" value="${esc(current.password || "")}" autocomplete="new-password"></div>`}
+  </div><div class="modal-foot"><button class="btn" id="tool-email-cancel">Cancelar</button><button class="btn primary" id="tool-email-save">${usesServer ? "Criar na HostGator" : "Salvar"}</button></div>`, {
     closeOnOverlay: true,
     onClose: () => openToolsModal("emails")
   });
@@ -6006,8 +6070,31 @@ function openToolEmailForm(id = null) {
     }
   });
   document.getElementById("tool-email-cancel").addEventListener("click", () => openToolsModal("emails"));
-  document.getElementById("tool-email-save").addEventListener("click", () => {
+  document.getElementById("tool-email-save").addEventListener("click", async () => {
     const client = document.getElementById("tool-email-client").value.trim();
+    const cnpj = document.getElementById("tool-email-cnpj").value.trim();
+    if (usesServer) {
+      const digits = cnpj.replace(/\D/g, "");
+      const company = cache?.companies?.find((item) => String(item.tax_id || "").replace(/\D/g, "") === digits);
+      if (!company) { toast("Informe o CNPJ de uma empresa cadastrada.", true); return; }
+      const button = document.getElementById("tool-email-save");
+      button.disabled = true;
+      button.textContent = "Criando...";
+      try {
+        const result = await emailAccountsRequest("POST", { companyId: company.tax_id });
+        const index = remoteToolEmails.findIndex((account) => account.id === result.account.id);
+        if (index >= 0) remoteToolEmails[index] = result.account;
+        else remoteToolEmails.unshift(result.account);
+        remoteToolEmailsLoaded = true;
+        toast(result.status === "created" ? `E-mail ${result.account.email} criado.` : `E-mail ${result.account.email} já estava criado.`);
+        openToolsModal("emails");
+      } catch (err) {
+        button.disabled = false;
+        button.textContent = "Criar na HostGator";
+        toast("Erro ao criar e-mail · " + err.message, true);
+      }
+      return;
+    }
     const email = document.getElementById("tool-email-address").value.trim();
     const password = document.getElementById("tool-email-password").value;
     if (!client || !email || !password) { toast("Preencha cliente, email e senha.", true); return; }
@@ -6030,7 +6117,7 @@ function openToolEmailForm(id = null) {
 }
 
 function toggleToolEmailSecret(id) {
-  const account = readToolRows(TOOL_EMAILS_KEY).find((item) => item.id === id);
+  const account = toolEmailRows().find((item) => item.id === id);
   const value = document.querySelector(`[data-secret-id="${CSS.escape(id)}"]`);
   if (!account || !value) return;
   const revealed = value.dataset.revealed === "true";
@@ -6039,7 +6126,7 @@ function toggleToolEmailSecret(id) {
 }
 
 async function copyToolEmailSecret(id) {
-  const account = readToolRows(TOOL_EMAILS_KEY).find((item) => item.id === id);
+  const account = toolEmailRows().find((item) => item.id === id);
   if (!account) return;
   try {
     await navigator.clipboard.writeText(account.password);

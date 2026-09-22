@@ -34,6 +34,11 @@ type CpanelResponse<T = unknown> = {
   errors?: string[] | null;
 };
 
+type CpanelMailbox = {
+  email?: string;
+  user?: string;
+};
+
 function requiredEnv(name: string) {
   const value = Deno.env.get(name)?.trim();
   if (!value) throw new HttpError(`Configuração ausente no Supabase: ${name}`, 500);
@@ -130,30 +135,25 @@ async function publicAccount(row: EmailAccountRow) {
   };
 }
 
-async function cpanelCall<T>(operation: string, params: Record<string, string>) {
-  const url = new URL(requiredEnv("CPANEL_BASE_URL"));
-  if (url.protocol !== "https:") throw new HttpError("CPANEL_BASE_URL deve usar HTTPS.", 500);
-  url.pathname = `/execute/Email/${operation}`;
-  url.search = new URLSearchParams(params).toString();
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `cpanel ${requiredEnv("CPANEL_USERNAME")}:${requiredEnv("CPANEL_API_TOKEN")}`,
-      Accept: "application/json",
-    },
-    signal: AbortSignal.timeout(20_000),
-  });
-  const body = await response.json().catch(() => null) as CpanelResponse<T> | null;
-  if (!response.ok || !body || body.status !== 1) {
-    const message = body?.errors?.filter(Boolean).join("; ") || `HostGator respondeu ${response.status}`;
+function mailboxAddress(account: CpanelMailbox) {
+  return String(account.email || account.user || "").trim().toLowerCase();
+}
+
+async function cpanelCall<T>(admin: ReturnType<typeof createClient>, operation: string, params: Record<string, string>) {
+  const { data, error } = await admin.rpc("cpanel_email_uapi", { operation, params });
+  if (error) throw new HttpError(`Falha na integração HostGator: ${error.message}`, 502);
+  const body = data as CpanelResponse<T> | null;
+  if (!body || body.status !== 1) {
+    const message = body?.errors?.filter(Boolean).join("; ") || "Resposta inválida da HostGator";
     throw new HttpError(message, 502);
   }
   return body;
 }
 
-async function cpanelMailboxExists(localPart: string, domain: string) {
-  const response = await cpanelCall<Array<{ email?: string; user?: string }>>("list_pops", { domain });
+async function cpanelMailboxExists(admin: ReturnType<typeof createClient>, localPart: string, domain: string) {
+  const response = await cpanelCall<CpanelMailbox[]>(admin, "list_pops", { domain });
   return (response.data || []).some((account) => {
-    const address = String(account.email || account.user || "").toLowerCase();
+    const address = mailboxAddress(account);
     return address === localPart.toLowerCase() || address === `${localPart}@${domain}`.toLowerCase();
   });
 }
@@ -180,9 +180,47 @@ Deno.serve(async (req) => {
     if (!actor || actor.status !== "active") throw new HttpError("Usuário sem acesso ativo ao CRM.", 403);
 
     if (req.method === "GET") {
-      const { data, error } = await admin.from("client_email_accounts").select("*").order("created_at", { ascending: false });
-      if (error) throw error;
-      return json({ accounts: await Promise.all((data || []).map((row) => publicAccount(row as EmailAccountRow))) });
+      const domain = (Deno.env.get("CPANEL_EMAIL_DOMAIN") || "ecommerce365.com.br").trim().toLowerCase();
+      const [cpanelResult, savedResult, companiesResult] = await Promise.all([
+        cpanelCall<CpanelMailbox[]>(admin, "list_pops", { domain }),
+        admin.from("client_email_accounts").select("*").order("created_at", { ascending: false }),
+        admin.from("companies").select("tax_id, trade_name, legal_name"),
+      ]);
+      if (savedResult.error) throw savedResult.error;
+      if (companiesResult.error) throw companiesResult.error;
+
+      const savedAccounts = await Promise.all((savedResult.data || []).map((row) => publicAccount(row as EmailAccountRow)));
+      const savedByEmail = new Map(savedAccounts.map((account) => [account.email.toLowerCase(), account]));
+      const companiesByRoot = new Map((companiesResult.data || []).map((company) => [
+        String(company.tax_id || "").replace(/\D/g, "").slice(0, 8),
+        company,
+      ]));
+      const cpanelAccounts = (cpanelResult.data || []).flatMap((mailbox) => {
+        const email = mailboxAddress(mailbox);
+        if (!email.endsWith(`@${domain}`)) return [];
+        const saved = savedByEmail.get(email);
+        if (saved) return [saved];
+        const localPart = email.slice(0, -(domain.length + 1));
+        const root = localPart.match(/^\d{8}/)?.[0] || "";
+        const company = companiesByRoot.get(root);
+        return [{
+          id: `cpanel:${email}`,
+          cnpj: company?.tax_id || root,
+          deliveryId: null,
+          client: company?.trade_name || company?.legal_name || "",
+          email,
+          password: null,
+          createdAt: null,
+          updatedAt: null,
+          cpanelOnly: true,
+        }];
+      });
+      const listedEmails = new Set(cpanelAccounts.map((account) => account.email.toLowerCase()));
+      for (const saved of savedAccounts) {
+        if (!listedEmails.has(saved.email.toLowerCase())) cpanelAccounts.push(saved);
+      }
+      cpanelAccounts.sort((a, b) => a.email.localeCompare(b.email, "pt-BR"));
+      return json({ accounts: cpanelAccounts });
     }
 
     const input = await req.json().catch(() => ({})) as { deliveryId?: string; companyId?: string };
@@ -210,14 +248,27 @@ Deno.serve(async (req) => {
     if (existingResult.error) throw existingResult.error;
     if (existingResult.data) return json({ status: "existing", account: await publicAccount(existingResult.data as EmailAccountRow) });
 
-    if (await cpanelMailboxExists(localPart, domain)) {
-      throw new HttpError(`O e-mail ${email} já existe na HostGator, mas a senha não está registrada no CRM.`, 409);
+    if (await cpanelMailboxExists(admin, localPart, domain)) {
+      return json({
+        status: "existing_unmanaged",
+        account: {
+          id: `cpanel:${email}`,
+          cnpj: company.tax_id,
+          deliveryId: delivery?.id || null,
+          client: delivery?.client_name || company.trade_name || company.legal_name || "Cliente",
+          email,
+          password: null,
+          createdAt: null,
+          updatedAt: null,
+          cpanelOnly: true,
+        },
+      });
     }
 
     const password = securePassword();
     const configuredQuota = Number(Deno.env.get("CPANEL_EMAIL_QUOTA_MB") || 250);
     const quota = String(Number.isInteger(configuredQuota) && configuredQuota >= 0 ? configuredQuota : 250);
-    await cpanelCall("add_pop", { domain, email: localPart, password, quota });
+    await cpanelCall(admin, "add_pop", { domain, email: localPart, password, quota });
 
     const record = {
       company_id: company.tax_id,
@@ -229,7 +280,7 @@ Deno.serve(async (req) => {
     };
     const saved = await admin.from("client_email_accounts").insert(record).select("*").single();
     if (saved.error) {
-      await cpanelCall("delete_pop", { domain, email: localPart }).catch(() => undefined);
+      await cpanelCall(admin, "delete_pop", { domain, email: localPart }).catch(() => undefined);
       throw saved.error;
     }
     return json({ status: "created", account: await publicAccount(saved.data as EmailAccountRow) }, 201);

@@ -362,7 +362,14 @@ async function provisionDeliveryEmail(project, { notify = true } = {}) {
       if (index >= 0) remoteToolEmails[index] = result.account;
       else remoteToolEmails.unshift(result.account);
     }
-    if (notify) toast(result.status === "created" ? `E-mail ${result.account.email} criado na HostGator.` : `E-mail ${result.account.email} já estava criado.`);
+    if (notify) {
+      const message = result.status === "created"
+        ? `E-mail ${result.account.email} criado na HostGator.`
+        : result.status === "existing_unmanaged"
+          ? `E-mail ${result.account.email} já existe na HostGator. A senha anterior não pode ser recuperada.`
+          : `E-mail ${result.account.email} já estava criado.`;
+      toast(message);
+    }
     return result.account;
   } catch (err) {
     if (notify) toast("Entrega salva, mas o e-mail não foi criado · " + err.message, true);
@@ -4560,13 +4567,14 @@ async function saveForm(tab, id, fs, opts = {}) {
       const dealId = id || saved?.id;
       if (dealId) await createProjectFromDeal({ id: dealId, company_id: body.company_id, contact_id: body.contact_id, product_id: body.product_id, title: body.title });
     }
-    if (tab === "projects" && !id && saved?.id) await provisionDeliveryEmail(saved);
+    const deliveryForEmail = tab === "projects" && !id && saved?.id ? saved : null;
     await init();
     if (opts.returnToRegistrations && document.getElementById("registrations-root")) {
       opts.closeAction?.();
       renderRegistrationsSection();
     } else if (opts.returnToRegistrations) openRegistrationsModal(opts.returnToRegistrations);
     else closeModal();
+    if (deliveryForEmail) provisionDeliveryEmail(deliveryForEmail);
   } catch (err) { toast("Erro ao salvar · " + err.message, true); }
 }
 
@@ -6034,7 +6042,9 @@ function renderToolEmails(root) {
   const rows = accounts.length ? accounts.map((account) => `<tr>
     ${columns.map((col) => {
       if (col.k === "client") return `<td><strong>${esc(account.client || "—")}</strong></td>`;
-      if (col.k === "password") return `<td><span class="tool-secret"><span class="tool-secret-value" data-secret-id="${esc(account.id)}">••••••••</span><button class="tool-icon-btn tool-email-reveal" data-id="${esc(account.id)}" title="Mostrar senha">◉</button><button class="tool-icon-btn tool-email-copy" data-id="${esc(account.id)}" title="Copiar senha">⧉</button></span></td>`;
+      if (col.k === "password") return account.password
+        ? `<td><span class="tool-secret"><span class="tool-secret-value" data-secret-id="${esc(account.id)}">••••••••</span><button class="tool-icon-btn tool-email-reveal" data-id="${esc(account.id)}" title="Mostrar senha">◉</button><button class="tool-icon-btn tool-email-copy" data-id="${esc(account.id)}" title="Copiar senha">⧉</button></span></td>`
+        : '<td><span class="muted">Não disponível</span></td>';
       return `<td>${esc(account[col.k] || "—")}</td>`;
     }).join("")}
     <td>${usesServer ? "—" : `<span class="tool-row-actions"><button class="tool-icon-btn tool-email-edit" data-id="${esc(account.id)}" title="Editar">✎</button><button class="tool-icon-btn tool-email-delete" data-id="${esc(account.id)}" title="Excluir">×</button></span>`}</td>
@@ -6087,7 +6097,11 @@ function openToolEmailForm(id = null) {
         if (index >= 0) remoteToolEmails[index] = result.account;
         else remoteToolEmails.unshift(result.account);
         remoteToolEmailsLoaded = true;
-        toast(result.status === "created" ? `E-mail ${result.account.email} criado.` : `E-mail ${result.account.email} já estava criado.`);
+        toast(result.status === "created"
+          ? `E-mail ${result.account.email} criado.`
+          : result.status === "existing_unmanaged"
+            ? `E-mail ${result.account.email} já existe. A senha anterior não pode ser recuperada.`
+            : `E-mail ${result.account.email} já estava criado.`);
         openToolsModal("emails");
       } catch (err) {
         button.disabled = false;
@@ -6120,7 +6134,7 @@ function openToolEmailForm(id = null) {
 function toggleToolEmailSecret(id) {
   const account = toolEmailRows().find((item) => item.id === id);
   const value = document.querySelector(`[data-secret-id="${CSS.escape(id)}"]`);
-  if (!account || !value) return;
+  if (!account?.password || !value) return;
   const revealed = value.dataset.revealed === "true";
   value.textContent = revealed ? "••••••••" : account.password;
   value.dataset.revealed = String(!revealed);
@@ -6128,7 +6142,7 @@ function toggleToolEmailSecret(id) {
 
 async function copyToolEmailSecret(id) {
   const account = toolEmailRows().find((item) => item.id === id);
-  if (!account) return;
+  if (!account?.password) { toast("A senha dessa conta não está registrada no CRM.", true); return; }
   try {
     await navigator.clipboard.writeText(account.password);
     toast("Senha copiada.");

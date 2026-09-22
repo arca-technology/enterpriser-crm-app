@@ -3,7 +3,7 @@ import { createClient } from "npm:@supabase/supabase-js@2.95.0";
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, apikey, content-type",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Methods": "GET, POST, PATCH, OPTIONS",
 };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
@@ -19,11 +19,12 @@ class HttpError extends Error {
 
 type EmailAccountRow = {
   id: string;
-  company_id: string;
+  company_id: string | null;
   delivery_id: string | null;
   client_name: string;
   email: string;
-  password_ciphertext: string;
+  password_ciphertext: string | null;
+  tags: string[];
   created_at: string;
   updated_at: string;
 };
@@ -129,7 +130,8 @@ async function publicAccount(row: EmailAccountRow) {
     deliveryId: row.delivery_id,
     client: row.client_name,
     email: row.email,
-    password: await decryptPassword(row.password_ciphertext),
+    password: row.password_ciphertext ? await decryptPassword(row.password_ciphertext) : null,
+    tags: Array.isArray(row.tags) ? row.tags : [],
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -160,7 +162,7 @@ async function cpanelMailboxExists(admin: ReturnType<typeof createClient>, local
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-  if (!["GET", "POST"].includes(req.method)) return json({ error: "Método não permitido." }, 405);
+  if (!["GET", "POST", "PATCH"].includes(req.method)) return json({ error: "Método não permitido." }, 405);
 
   try {
     const supabaseUrl = requiredEnv("SUPABASE_URL");
@@ -178,6 +180,49 @@ Deno.serve(async (req) => {
       .select("id, status").eq("auth_user_id", authData.user.id).maybeSingle();
     if (actorError) throw actorError;
     if (!actor || actor.status !== "active") throw new HttpError("Usuário sem acesso ativo ao CRM.", 403);
+
+    if (req.method === "PATCH") {
+      const input = await req.json().catch(() => ({})) as { email?: string; password?: string; tags?: string[] };
+      const email = String(input.email || "").trim().toLowerCase();
+      const domain = (Deno.env.get("CPANEL_EMAIL_DOMAIN") || "ecommerce365.com.br").trim().toLowerCase();
+      if (!email.endsWith(`@${domain}`)) throw new HttpError("Informe uma conta válida do domínio configurado.");
+
+      const localPart = email.slice(0, -(domain.length + 1));
+      if (!await cpanelMailboxExists(admin, localPart, domain)) throw new HttpError("Essa conta não existe na HostGator.", 404);
+
+      const tags = [...new Set((Array.isArray(input.tags) ? input.tags : [])
+        .map((tag) => String(tag).trim()).filter(Boolean).slice(0, 20)
+        .map((tag) => tag.slice(0, 40)))];
+      const passwordProvided = Object.prototype.hasOwnProperty.call(input, "password") && String(input.password || "").length > 0;
+      if (passwordProvided && String(input.password).length > 256) throw new HttpError("A senha informada é muito longa.");
+
+      const existing = await admin.from("client_email_accounts").select("*").eq("email", email).maybeSingle();
+      if (existing.error) throw existing.error;
+      let saved;
+      if (existing.data) {
+        const patch: Record<string, unknown> = { tags, updated_at: new Date().toISOString() };
+        if (passwordProvided) patch.password_ciphertext = await encryptPassword(String(input.password));
+        saved = await admin.from("client_email_accounts").update(patch).eq("id", existing.data.id).select("*").single();
+      } else {
+        const companiesResult = await admin.from("companies").select("tax_id, trade_name, legal_name");
+        if (companiesResult.error) throw companiesResult.error;
+        const root = localPart.match(/^\d{8}/)?.[0] || "";
+        const company = (companiesResult.data || []).find((item) =>
+          String(item.tax_id || "").replace(/\D/g, "").slice(0, 8) === root
+        );
+        saved = await admin.from("client_email_accounts").insert({
+          company_id: company?.tax_id || null,
+          delivery_id: null,
+          client_name: company?.trade_name || company?.legal_name || "Conta existente",
+          email,
+          password_ciphertext: passwordProvided ? await encryptPassword(String(input.password)) : null,
+          tags,
+          created_by: authData.user.id,
+        }).select("*").single();
+      }
+      if (saved.error) throw saved.error;
+      return json({ status: "updated", account: await publicAccount(saved.data as EmailAccountRow) });
+    }
 
     if (req.method === "GET") {
       const domain = (Deno.env.get("CPANEL_EMAIL_DOMAIN") || "ecommerce365.com.br").trim().toLowerCase();
@@ -210,6 +255,7 @@ Deno.serve(async (req) => {
           client: company?.trade_name || company?.legal_name || "",
           email,
           password: null,
+          tags: [],
           createdAt: null,
           updatedAt: null,
           cpanelOnly: true,
@@ -258,6 +304,7 @@ Deno.serve(async (req) => {
           client: delivery?.client_name || company.trade_name || company.legal_name || "Cliente",
           email,
           password: null,
+          tags: [],
           createdAt: null,
           updatedAt: null,
           cpanelOnly: true,

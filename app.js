@@ -2653,7 +2653,7 @@ const TASK_STATUS = [
   { id: "doing", label: "Em andamento" },
   { id: "done", label: "Concluído" }
 ];
-let projectBoardState = { projectId: null, view: "table", section: "activities", search: "", page: 1, pageSize: 50, calendarCursor: null };
+let projectBoardState = { projectId: null, view: "table", section: "activities", search: "", page: 1, pageSize: 50, calendarCursor: null, sortKey: null, sortDir: 1, filters: {} };
 
 function userOptions(selected = "") {
   return ['<option value="">Sem responsável</option>']
@@ -2782,7 +2782,7 @@ function taskCardHtml(task) {
 function openProjectBoard(projectId) {
   const project = (cache.projects || []).find((p) => p.id === projectId);
   if (!project) return;
-  projectBoardState = { projectId, view: "table", section: "activities", search: "", page: 1, pageSize: 50, calendarCursor: null };
+  projectBoardState = { projectId, view: "table", section: "activities", search: "", page: 1, pageSize: 50, calendarCursor: null, sortKey: null, sortDir: 1, filters: {} };
   const headerCenter = `<div class="modal-header-tabs" role="tablist" aria-label="Conteúdo da entrega">
     <button class="modal-header-tab active" data-project-section="activities" role="tab">Tarefas</button>
     <button class="modal-header-tab" data-project-section="objectives" role="tab">Objetivos</button>
@@ -2798,6 +2798,9 @@ function openProjectBoard(projectId) {
     projectBoardState.view = "table";
     projectBoardState.search = "";
     projectBoardState.page = 1;
+    projectBoardState.sortKey = null;
+    projectBoardState.sortDir = 1;
+    projectBoardState.filters = {};
     document.querySelectorAll("[data-project-section]").forEach((tab) => tab.classList.toggle("active", tab === button));
     renderProjectBoard(projectId);
   }));
@@ -2893,7 +2896,7 @@ function renderProjectTaskGantt(tasks) {
 }
 
 function renderDeliveryObjectives(projectId, tasks, sourceRows = null) {
-  const objectives = (sourceRows || loadDeliveryObjectives().filter((item) => item.project_id === projectId))
+  const objectives = sourceRows || loadDeliveryObjectives().filter((item) => item.project_id === projectId)
     .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
   const rows = objectives.map((objective) => {
     const linked = tasks.filter((task) => task.objective_id === objective.id);
@@ -2965,7 +2968,7 @@ function deliveryGoalDependencyLabel(goal) {
 }
 
 function renderDeliveryGoals(projectId, sourceRows = null) {
-  const goals = (sourceRows || loadDeliveryGoals().filter((item) => item.project_id === projectId))
+  const goals = sourceRows || loadDeliveryGoals().filter((item) => item.project_id === projectId)
     .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0));
   const rows = goals.map((goal) => {
     const current = Number(goal.current_value || 0);
@@ -3041,14 +3044,81 @@ function projectSectionRows(projectId, section = projectBoardState.section) {
   return projectTasks(projectId);
 }
 
-function filterProjectSectionRows(rows) {
+const PROJECT_TABLE_LABELS = {
+  activities: ["Tarefa", "Origem", "Prioridade", "Depende de", "Informação", "Grupo", "Setor", "Canal", "Tipo", "Checklist", "Objetivo", "Responsáveis", "Prazo", "Status", "Notas"],
+  objectives: ["Objetivo", "Critério de conclusão", "Progresso das tarefas", "Depende de", "Responsável", "Prazo", "Status"],
+  goals: ["Meta", "Indicador", "Valor atual", "Valor-alvo", "Progresso", "Depende de", "Responsável", "Prazo", "Status"]
+};
+
+function projectSectionValues(item, tasks = []) {
+  if (projectBoardState.section === "activities") {
+    const checklist = checklistProgress(item.checklist);
+    return [
+      activityDisplayName(item),
+      item.source_template_id ? "Produto" : "Dia a dia",
+      PRIORITY_LABEL[item.priority || "normal"] || "Normal",
+      dependencyNames(item.dependency_ids, item.depends_on_activity_id, tasks),
+      item.information || "—", item.group || "—", item.sector || "—", item.channel || "—", item.type || "—",
+      `${checklist.done}/${checklist.total}`,
+      cache.deliveryObjectiveById?.[item.objective_id]?.name || "—",
+      assigneeNames(item.assignee_ids, item.owner_id),
+      item.due_date ? dt(item.due_date) : "—",
+      TASK_STATUS.find((status) => status.id === (item.status || "todo"))?.label || "A fazer",
+      item.notes || "—"
+    ];
+  }
+  if (projectBoardState.section === "objectives") {
+    const linked = tasks.filter((task) => task.objective_id === item.id);
+    const done = linked.filter((task) => task.status === "done").length;
+    const progress = linked.length ? Math.round(done / linked.length * 100) : 0;
+    return [
+      item.name || "—", item.completion_criteria || "—", `${done}/${linked.length} · ${progress}%`,
+      deliveryObjectiveDependencyLabel(item), assigneeNames([], item.owner_id),
+      item.due_date ? dt(item.due_date) : "—",
+      TASK_STATUS.find((status) => status.id === (item.status || "todo"))?.label || "A fazer"
+    ];
+  }
+  const current = Number(item.current_value || 0);
+  const target = Number(item.target_value || 0);
+  return [
+    item.name || "—", item.metric || "—", current.toLocaleString("pt-BR"),
+    `${GOAL_COMPARISON_LABEL[item.comparison] || "No mínimo"} ${target.toLocaleString("pt-BR")} ${item.unit || ""}`.trim(),
+    `${target ? Math.max(0, Math.min(100, Math.round(current / target * 100))) : 0}%`,
+    deliveryGoalDependencyLabel(item), assigneeNames([], item.owner_id),
+    item.due_date ? dt(item.due_date) : "—",
+    TASK_STATUS.find((status) => status.id === (item.status || "todo"))?.label || "A fazer"
+  ];
+}
+
+function projectRowValue(item, key, tasks) {
+  const index = Number(String(key || "").slice(1));
+  return String(projectSectionValues(item, tasks)[index] ?? "—");
+}
+
+function filterProjectSectionRows(rows, tasks = []) {
   const query = String(projectBoardState.search || "").trim().toLocaleLowerCase("pt-BR");
-  if (!query) return rows;
-  return rows.filter((item) => {
-    const values = Object.values(item).flatMap((value) => Array.isArray(value) ? value : [value]);
-    if (values.some((value) => String(value ?? "").toLocaleLowerCase("pt-BR").includes(query))) return true;
-    return projectBoardState.section === "activities" && activityDisplayName(item).toLocaleLowerCase("pt-BR").includes(query);
+  const filters = projectBoardState.filters || {};
+  const filtered = rows.filter((item) => {
+    const values = projectSectionValues(item, tasks);
+    const matchesSearch = !query || values.some((value) => String(value ?? "").toLocaleLowerCase("pt-BR").includes(query));
+    return matchesSearch && Object.entries(filters).every(([key, selected]) =>
+      !selected?.size || selected.has(projectRowValue(item, key, tasks))
+    );
   });
+  if (!projectBoardState.sortKey) return filtered;
+  return filtered.sort((a, b) => projectRowValue(a, projectBoardState.sortKey, tasks).localeCompare(
+    projectRowValue(b, projectBoardState.sortKey, tasks), "pt-BR", { numeric: true, sensitivity: "base" }
+  ) * projectBoardState.sortDir);
+}
+
+function projectFilterStripHtml() {
+  const filters = projectBoardState.filters || {};
+  const labels = PROJECT_TABLE_LABELS[projectBoardState.section] || [];
+  const active = Object.entries(filters).filter(([, values]) => values?.size);
+  return `<div class="registration-filter-strip"><div class="registration-filter-badges">${active.map(([key, values]) => {
+    const label = labels[Number(key.slice(1))] || key;
+    return `<button class="registration-filter-badge project-filter-badge" data-key="${esc(key)}" title="Limpar filtro"><span>${esc(label)}: ${esc([...values].join(", "))}</span><b>×</b></button>`;
+  }).join("")}</div><button class="filter-clear-all project-filter-clear-all" type="button"${active.length < 2 ? " hidden" : ""}><span aria-hidden="true">×</span> Limpar tudo</button></div>`;
 }
 
 function projectToolbarHtml(client, product, total) {
@@ -3070,7 +3140,7 @@ function renderProjectBoard(projectId) {
   if (!root || !project) return;
   const allTasks = projectTasks(projectId);
   const allRows = projectSectionRows(projectId);
-  const rows = filterProjectSectionRows(allRows);
+  const rows = filterProjectSectionRows(allRows, allTasks);
   const client = cache.companyById[project.company_id]?.legal_name || "Sem cliente";
   const product = cache.productById[project.product_id]?.name || "Sem produto";
   const view = projectBoardState.view || "table";
@@ -3086,7 +3156,7 @@ function renderProjectBoard(projectId) {
       : view === "matrix" ? renderDeliveryStatusMatrix(rows, "goals")
       : renderDeliverySectionDashboard(rows, "goals");
   }
-  root.innerHTML = `<div class="project-board">${projectToolbarHtml(client, product, rows.length)}${body}</div>`;
+  root.innerHTML = `<div class="project-board">${projectToolbarHtml(client, product, rows.length)}${view === "table" ? projectFilterStripHtml() : ""}${body}</div>`;
   const table = root.querySelector("table");
   if (table && view === "table") wireProjectTableColumns(table);
   if (projectBoardState.section === "objectives" && view === "table") wireDeliveryObjectives(projectId);
@@ -3471,12 +3541,88 @@ function wireProjectTableColumns(table) {
     const key = `d${index}`;
     header.dataset.projectColumn = key;
     header.dataset.projectLabel = header.textContent.trim();
+    header.title = "Clique para ordenar. Ctrl+clique para filtrar.";
     projectTableRows(table).forEach((row) => {
       const cell = row.children[index];
       if (cell) cell.dataset.projectColumn = key;
     });
+    if (projectBoardState.sortKey === key) {
+      header.insertAdjacentHTML("beforeend", ` <span class="arrow">${projectBoardState.sortDir > 0 ? "▲" : "▼"}</span>`);
+    }
+    header.addEventListener("click", (event) => {
+      if (event.ctrlKey || event.metaKey) {
+        openProjectColumnFilter(header, key);
+        return;
+      }
+      if (projectBoardState.sortKey === key) projectBoardState.sortDir *= -1;
+      else {
+        projectBoardState.sortKey = key;
+        projectBoardState.sortDir = 1;
+      }
+      projectBoardState.page = 1;
+      renderProjectBoard(projectBoardState.projectId);
+    });
   });
   applyProjectTableColumnPreferences(table);
+}
+
+function openProjectColumnFilter(header, key) {
+  document.getElementById("project-filter-dd")?.remove();
+  const tasks = projectTasks(projectBoardState.projectId);
+  const rows = projectSectionRows(projectBoardState.projectId);
+  const values = [...new Set(rows.map((item) => projectRowValue(item, key, tasks)))]
+    .sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true, sensitivity: "base" }));
+  const selected = new Set(projectBoardState.filters?.[key] || []);
+  const rect = header.getBoundingClientRect();
+  const panel = document.createElement("div");
+  panel.id = "project-filter-dd";
+  panel.className = "filter-dd";
+  panel.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 330))}px`;
+  panel.style.top = `${Math.min(rect.bottom + 4, window.innerHeight - 360)}px`;
+  panel.innerHTML = `<div class="dd-head"><span>Filtrar · ${esc(header.dataset.projectLabel)}</span><span>${values.length}</span></div>
+    <div class="dd-search"><input placeholder="Buscar..."></div><div class="dd-list"></div>
+    <div class="dd-foot"><button class="btn project-filter-all">Todos</button><button class="btn danger project-filter-clear">Limpar</button><button class="btn primary project-filter-apply">Aplicar</button></div>`;
+  document.body.appendChild(panel);
+  const list = panel.querySelector(".dd-list");
+  const draw = () => {
+    const query = panel.querySelector("input").value.trim().toLocaleLowerCase("pt-BR");
+    list.innerHTML = values.filter((value) => !query || value.toLocaleLowerCase("pt-BR").includes(query))
+      .map((value) => `<label class="dd-item${selected.has(value) ? " on" : ""}" data-value="${esc(value)}"><span class="dd-check">${selected.has(value) ? "✓" : ""}</span><span>${esc(value)}</span></label>`).join("");
+    list.querySelectorAll(".dd-item").forEach((item) => item.addEventListener("click", () => {
+      const value = item.dataset.value;
+      if (selected.has(value)) selected.delete(value); else selected.add(value);
+      draw();
+    }));
+  };
+  draw();
+  panel.querySelector("input").addEventListener("input", draw);
+  panel.querySelector(".project-filter-all").addEventListener("click", () => {
+    if (selected.size === values.length) selected.clear(); else values.forEach((value) => selected.add(value));
+    draw();
+  });
+  panel.querySelector(".project-filter-clear").addEventListener("click", () => {
+    delete projectBoardState.filters[key];
+    projectBoardState.page = 1;
+    panel.remove();
+    renderProjectBoard(projectBoardState.projectId);
+  });
+  panel.querySelector(".project-filter-apply").addEventListener("click", () => {
+    if (selected.size && selected.size < values.length) projectBoardState.filters[key] = selected;
+    else delete projectBoardState.filters[key];
+    projectBoardState.page = 1;
+    panel.remove();
+    renderProjectBoard(projectBoardState.projectId);
+  });
+  panel.querySelector("input").focus();
+  setTimeout(() => {
+    const outside = (event) => {
+      if (!panel.contains(event.target) && !header.contains(event.target)) {
+        panel.remove();
+        document.removeEventListener("mousedown", outside);
+      }
+    };
+    document.addEventListener("mousedown", outside);
+  }, 50);
 }
 
 function openProjectColumnManager(table) {
@@ -3506,6 +3652,16 @@ function wireProjectBoard(projectId) {
     event.stopPropagation();
     const table = document.querySelector("#project-board-root table");
     if (table) openProjectColumnManager(table);
+  });
+  document.querySelectorAll(".project-filter-badge").forEach((badge) => badge.addEventListener("click", () => {
+    delete projectBoardState.filters[badge.dataset.key];
+    projectBoardState.page = 1;
+    renderProjectBoard(projectId);
+  }));
+  document.querySelector(".project-filter-clear-all")?.addEventListener("click", () => {
+    projectBoardState.filters = {};
+    projectBoardState.page = 1;
+    renderProjectBoard(projectId);
   });
   document.getElementById("project-add-task")?.addEventListener("click", () => openDeliveryTaskDrawer(projectId));
   document.getElementById("project-page-prev")?.addEventListener("click", () => { projectBoardState.page -= 1; renderProjectBoard(projectId); });
@@ -5841,9 +5997,9 @@ const TOOL_FOLDERS_KEY = "crm_tool_folders";
 const TOOL_EMAILS_KEY = "crm_tool_emails";
 const TOOL_COLUMN_DEFS = {
   files: [{ k: "name", h: "Nome" }, { k: "description", h: "Descrição" }, { k: "url", h: "Link" }],
-  emails: [{ k: "cnpj", h: "CNPJ" }, { k: "client", h: "Cliente" }, { k: "email", h: "Email" }, { k: "password", h: "Senha" }]
+  emails: [{ k: "cnpj", h: "CNPJ" }, { k: "client", h: "Cliente" }, { k: "email", h: "Email" }, { k: "password", h: "Senha" }, { k: "tags", h: "Tags" }]
 };
-let toolsState = { section: "files", search: "" };
+let toolsState = { section: "files", search: "", tables: {} };
 let remoteToolEmails = [];
 let remoteToolEmailsLoaded = false;
 let remoteToolEmailsLoading = false;
@@ -5896,6 +6052,17 @@ function openToolsModal(section = "files") {
 function visibleToolColumns(section = toolsState.section) {
   const prefs = secondaryColumnPrefs(`tools:${section}`);
   return orderedColumnDefinitions(TOOL_COLUMN_DEFS[section], prefs).filter((col) => prefs[col.k] !== false);
+}
+
+function toolTableState(section = toolsState.section) {
+  if (!toolsState.tables[section]) toolsState.tables[section] = { sortKey: null, sortDir: 1, filters: {} };
+  return toolsState.tables[section];
+}
+
+function toolEmailValue(account, key) {
+  if (key === "password") return account.password ? "Disponível" : "Não disponível";
+  if (key === "tags") return (account.tags || []).join(", ");
+  return String(account[key] || "—");
 }
 
 function toolsToolbarHtml(count, addTitle, addId) {
@@ -6037,7 +6204,19 @@ function renderToolEmails(root) {
   if (usesServer && !remoteToolEmailsLoaded && !remoteToolEmailsLoading && !remoteToolEmailsError) loadRemoteToolEmails();
   const allAccounts = toolEmailRows();
   const query = toolsState.search.trim().toLocaleLowerCase("pt-BR");
-  const accounts = allAccounts.filter((account) => !query || [account.cnpj, account.client, account.email].some((value) => String(value || "").toLocaleLowerCase("pt-BR").includes(query)));
+  const tableState = toolTableState("emails");
+  const accounts = allAccounts.filter((account) => {
+    const matchesSearch = !query || [account.cnpj, account.client, account.email, ...(account.tags || [])]
+      .some((value) => String(value || "").toLocaleLowerCase("pt-BR").includes(query));
+    return matchesSearch && Object.entries(tableState.filters).every(([key, selected]) =>
+      !selected?.size || selected.has(toolEmailValue(account, key))
+    );
+  });
+  if (tableState.sortKey) {
+    accounts.sort((a, b) => toolEmailValue(a, tableState.sortKey).localeCompare(
+      toolEmailValue(b, tableState.sortKey), "pt-BR", { numeric: true, sensitivity: "base" }
+    ) * tableState.sortDir);
+  }
   const columns = visibleToolColumns("emails");
   const rows = accounts.length ? accounts.map((account) => `<tr>
     ${columns.map((col) => {
@@ -6045,26 +6224,106 @@ function renderToolEmails(root) {
       if (col.k === "password") return account.password
         ? `<td><span class="tool-secret"><span class="tool-secret-value" data-secret-id="${esc(account.id)}">••••••••</span><button class="tool-icon-btn tool-email-reveal" data-id="${esc(account.id)}" title="Mostrar senha">◉</button><button class="tool-icon-btn tool-email-copy" data-id="${esc(account.id)}" title="Copiar senha">⧉</button></span></td>`
         : '<td><span class="muted">Não disponível</span></td>';
+      if (col.k === "tags") return `<td><span class="tool-tags">${(account.tags || []).map((tag) => `<span class="tool-tag">${esc(tag)}</span>`).join("") || '<span class="muted">—</span>'}</span></td>`;
       return `<td>${esc(account[col.k] || "—")}</td>`;
     }).join("")}
-    <td>${usesServer ? "—" : `<span class="tool-row-actions"><button class="tool-icon-btn tool-email-edit" data-id="${esc(account.id)}" title="Editar">✎</button><button class="tool-icon-btn tool-email-delete" data-id="${esc(account.id)}" title="Excluir">×</button></span>`}</td>
+    <td><span class="tool-row-actions"><button class="tool-icon-btn tool-email-edit" data-id="${esc(account.id)}" title="Editar senha local e tags">✎</button>${usesServer ? "" : `<button class="tool-icon-btn tool-email-delete" data-id="${esc(account.id)}" title="Excluir">×</button>`}</span></td>
   </tr>`).join("") : `<tr><td colspan="${columns.length + 1}" class="tool-empty">Nenhum e-mail cadastrado.</td></tr>`;
   const feedback = usesServer && remoteToolEmailsLoading ? '<div class="tool-empty">Carregando e-mails...</div>'
     : usesServer && remoteToolEmailsError ? `<div class="tool-empty">Não foi possível carregar os e-mails: ${esc(remoteToolEmailsError)}</div>` : "";
-  root.innerHTML = `${toolsToolbarHtml(accounts.length, "Criar e-mail pelo CNPJ", "tool-email-add")}${feedback}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th>${esc(col.h)}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const activeFilters = Object.entries(tableState.filters).filter(([, values]) => values?.size);
+  const filterStrip = `<div class="registration-filter-strip"><div class="registration-filter-badges">${activeFilters.map(([key, values]) => {
+    const label = TOOL_COLUMN_DEFS.emails.find((col) => col.k === key)?.h || key;
+    return `<button class="registration-filter-badge tool-filter-badge" data-key="${esc(key)}" title="Limpar filtro"><span>${esc(label)}: ${esc([...values].join(", "))}</span><b>×</b></button>`;
+  }).join("")}</div><button class="filter-clear-all tool-filter-clear-all" type="button"${activeFilters.length < 2 ? " hidden" : ""}><span aria-hidden="true">×</span> Limpar tudo</button></div>`;
+  root.innerHTML = `${toolsToolbarHtml(accounts.length, "Criar e-mail pelo CNPJ", "tool-email-add")}${filterStrip}${feedback}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   wireToolsToolbar(root);
   document.getElementById("tool-email-add").addEventListener("click", () => openToolEmailForm());
   root.querySelectorAll(".tool-email-reveal").forEach((button) => button.addEventListener("click", () => toggleToolEmailSecret(button.dataset.id)));
   root.querySelectorAll(".tool-email-copy").forEach((button) => button.addEventListener("click", () => copyToolEmailSecret(button.dataset.id)));
   root.querySelectorAll(".tool-email-edit").forEach((button) => button.addEventListener("click", () => openToolEmailForm(button.dataset.id)));
   root.querySelectorAll(".tool-email-delete").forEach((button) => button.addEventListener("click", () => deleteToolEmail(button.dataset.id)));
+  root.querySelectorAll("th[data-tool-key]").forEach((header) => header.addEventListener("click", (event) => {
+    const key = header.dataset.toolKey;
+    if (event.ctrlKey || event.metaKey) { openToolEmailColumnFilter(header, key, allAccounts); return; }
+    if (tableState.sortKey === key) tableState.sortDir *= -1;
+    else { tableState.sortKey = key; tableState.sortDir = 1; }
+    renderToolsSection();
+  }));
+  root.querySelectorAll(".tool-filter-badge").forEach((badge) => badge.addEventListener("click", () => {
+    delete tableState.filters[badge.dataset.key];
+    renderToolsSection();
+  }));
+  root.querySelector(".tool-filter-clear-all")?.addEventListener("click", () => {
+    tableState.filters = {};
+    renderToolsSection();
+  });
+}
+
+function openToolEmailColumnFilter(header, key, accounts) {
+  document.getElementById("tool-filter-dd")?.remove();
+  const values = [...new Set(accounts.map((account) => toolEmailValue(account, key)))].sort((a, b) =>
+    a.localeCompare(b, "pt-BR", { numeric: true, sensitivity: "base" })
+  );
+  const tableState = toolTableState("emails");
+  let selected = new Set(tableState.filters[key] || []);
+  const rect = header.getBoundingClientRect();
+  const panel = document.createElement("div");
+  panel.id = "tool-filter-dd";
+  panel.className = "filter-dd";
+  panel.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 300))}px`;
+  panel.style.top = `${rect.bottom + 4}px`;
+  panel.style.maxHeight = `${Math.max(220, window.innerHeight - rect.bottom - 20)}px`;
+  panel.innerHTML = `<div class="dd-head"><span>Filtrar · ${esc(TOOL_COLUMN_DEFS.emails.find((col) => col.k === key)?.h || key)}</span><span>${values.length}</span></div>
+    <div class="dd-search"><input placeholder="Buscar..."></div><div class="dd-list"></div>
+    <div class="dd-foot"><button class="btn tool-filter-all">Todos</button><button class="btn danger tool-filter-clear">Limpar</button><button class="btn primary tool-filter-apply">Aplicar</button></div>`;
+  document.body.appendChild(panel);
+  const list = panel.querySelector(".dd-list");
+  const draw = () => {
+    const query = panel.querySelector("input").value.trim().toLocaleLowerCase("pt-BR");
+    list.innerHTML = values.filter((value) => !query || value.toLocaleLowerCase("pt-BR").includes(query)).map((value) => `<label class="dd-item${selected.has(value) ? " on" : ""}" data-value="${esc(value)}"><span class="dd-check">${selected.has(value) ? "✓" : ""}</span><span>${esc(value)}</span></label>`).join("");
+    list.querySelectorAll(".dd-item").forEach((item) => item.addEventListener("click", () => {
+      const value = item.dataset.value;
+      if (selected.has(value)) selected.delete(value); else selected.add(value);
+      draw();
+    }));
+  };
+  draw();
+  panel.querySelector("input").addEventListener("input", draw);
+  panel.querySelector(".tool-filter-all").addEventListener("click", () => {
+    if (selected.size === values.length) selected.clear(); else values.forEach((value) => selected.add(value));
+    draw();
+  });
+  panel.querySelector(".tool-filter-clear").addEventListener("click", () => {
+    delete tableState.filters[key]; panel.remove(); renderToolsSection();
+  });
+  panel.querySelector(".tool-filter-apply").addEventListener("click", () => {
+    if (selected.size && selected.size < values.length) tableState.filters[key] = selected;
+    else delete tableState.filters[key];
+    panel.remove(); renderToolsSection();
+  });
+  panel.querySelector("input").focus();
+  setTimeout(() => {
+    const outside = (event) => {
+      if (!panel.contains(event.target) && !header.contains(event.target)) {
+        panel.remove();
+        document.removeEventListener("mousedown", outside);
+      }
+    };
+    document.addEventListener("mousedown", outside);
+  }, 50);
 }
 
 function openToolEmailForm(id = null) {
   const usesServer = APP_VARIANT === "web" && isLive();
   const current = toolEmailRows().find((item) => item.id === id) || {};
-  if (usesServer && id) return;
-  sidePanel(id ? "Editar e-mail" : "Novo e-mail", `<div class="form">
+  const editingServer = usesServer && Boolean(id);
+  sidePanel(id ? "Editar e-mail" : "Novo e-mail", editingServer ? `<div class="form">
+    <div class="field full"><label>E-mail</label><input value="${esc(current.email || "")}" disabled></div>
+    <div class="field full"><label>Senha registrada no CRM</label><input id="tool-email-password" type="password" value="" autocomplete="new-password" placeholder="Deixe em branco para manter a atual"></div>
+    <div class="field full"><label>Tags</label><input id="tool-email-tags" value="${esc((current.tags || []).join(", "))}" placeholder="Excluir, Alterar senha"></div>
+    <div class="field full"><div class="panel-list"><strong>Atenção</strong><span>Alterar a senha aqui atualiza apenas o registro do CRM. A senha da conta no painel da HostGator não será modificada.</span></div></div>
+  </div><div class="modal-foot"><button class="btn" id="tool-email-cancel">Cancelar</button><button class="btn primary" id="tool-email-save">Salvar no CRM</button></div>` : `<div class="form">
     <div class="field full"><label>CNPJ</label><input id="tool-email-cnpj" value="${esc(current.cnpj || "")}"></div>
     <div class="field full"><label>Cliente</label><input id="tool-email-client" value="${esc(current.client || "")}"></div>
     ${usesServer ? '<div class="field full"><span class="muted">O endereço usará a raiz do CNPJ e a senha será gerada automaticamente.</span></div>' : `<div class="field full"><label>Email</label><input id="tool-email-address" type="email" value="${esc(current.email || "")}"></div><div class="field full"><label>Senha</label><input id="tool-email-password" type="password" value="${esc(current.password || "")}" autocomplete="new-password"></div>`}
@@ -6072,6 +6331,29 @@ function openToolEmailForm(id = null) {
     closeOnOverlay: true,
     onClose: () => openToolsModal("emails")
   });
+  document.getElementById("tool-email-cancel").addEventListener("click", () => openToolsModal("emails"));
+  if (editingServer) {
+    document.getElementById("tool-email-save").addEventListener("click", async () => {
+      const button = document.getElementById("tool-email-save");
+      button.disabled = true;
+      button.textContent = "Salvando...";
+      try {
+        const password = document.getElementById("tool-email-password").value;
+        const tags = document.getElementById("tool-email-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean);
+        const result = await emailAccountsRequest("PATCH", { email: current.email, ...(password ? { password } : {}), tags });
+        const index = remoteToolEmails.findIndex((account) => account.email === result.account.email);
+        if (index >= 0) remoteToolEmails[index] = result.account;
+        else remoteToolEmails.unshift(result.account);
+        toast("Dados salvos no CRM. A senha da HostGator não foi alterada.");
+        openToolsModal("emails");
+      } catch (err) {
+        button.disabled = false;
+        button.textContent = "Salvar no CRM";
+        toast("Erro ao atualizar e-mail · " + err.message, true);
+      }
+    });
+    return;
+  }
   const cnpjInput = document.getElementById("tool-email-cnpj");
   cnpjInput.addEventListener("blur", () => {
     const digits = cnpjInput.value.replace(/\D/g, "");
@@ -6080,7 +6362,6 @@ function openToolEmailForm(id = null) {
       document.getElementById("tool-email-client").value = company.trade_name || company.legal_name || "";
     }
   });
-  document.getElementById("tool-email-cancel").addEventListener("click", () => openToolsModal("emails"));
   document.getElementById("tool-email-save").addEventListener("click", async () => {
     const client = document.getElementById("tool-email-client").value.trim();
     const cnpj = document.getElementById("tool-email-cnpj").value.trim();

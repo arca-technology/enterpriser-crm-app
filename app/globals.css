@@ -137,6 +137,8 @@
   .view.locked{opacity:.35;cursor:not-allowed;pointer-events:none}
   .select-cell,.select-head{width:42px;min-width:42px;max-width:42px;text-align:center}
   .select-cell input,.select-head input{accent-color:var(--blue)}
+  .table-selection-count{padding-left:6px;color:var(--cyan);font-weight:700;white-space:nowrap}
+  table tbody tr.selected > td{box-shadow:inset 0 1px rgba(28,200,232,.18),inset 0 -1px rgba(28,200,232,.18)}
   .chat-log{padding:16px 18px;display:flex;flex-direction:column;gap:8px;max-height:58vh;overflow:auto}
   .chat-msg{max-width:78%;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--panel2)}
   .chat-msg.mine{align-self:flex-end;background:#122a45}

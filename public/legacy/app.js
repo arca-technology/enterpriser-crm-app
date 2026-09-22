@@ -163,6 +163,15 @@ function normalizeIdList(value, fallback = null) {
   if (!normalized.length && fallback) normalized.push(String(fallback));
   return normalized;
 }
+function normalizeTextList(value) {
+  let values = value;
+  if (typeof values === "string") {
+    try { values = JSON.parse(values); } catch (e) { values = values.replace(/^\{|\}$/g, "").split(","); }
+  }
+  return Array.isArray(values)
+    ? [...new Map(values.map((item) => String(item || "").trim()).filter(Boolean).map((item) => [item.toLocaleLowerCase("pt-BR"), item])).values()]
+    : [];
+}
 function priorityBadge(value) {
   const priority = PRIORITY_LABEL[value] ? value : "normal";
   return `<span class="badge priority-badge priority-${priority}">${esc(PRIORITY_LABEL[priority])}</span>`;
@@ -484,6 +493,7 @@ function activityRemoteBody(task) {
     checklist: normalizeChecklist(task.checklist),
     owner_id: task.owner_id || null,
     assignee_ids: normalizeIdList(task.assignee_ids, task.owner_id),
+    assignee_job_titles: normalizeTextList(task.assignee_job_titles),
     priority: task.priority || "normal",
     due_date: task.due_date || null,
     notes: task.notes || null,
@@ -506,6 +516,8 @@ function productActivityRemoteBody(template) {
     information: template.information || null,
     default_owner_id: template.default_owner_id || null,
     default_assignee_ids: normalizeIdList(template.default_assignee_ids, template.default_owner_id),
+    default_assignee_job_titles: normalizeTextList(template.default_assignee_job_titles),
+    template_group_id: template.template_group_id || crypto.randomUUID(),
     priority: template.priority || "normal",
     objective_template_id: template.objective_template_id || null,
     recurrence: template.recurrence || "once",
@@ -736,6 +748,10 @@ async function syncProductActivities() {
             updates.assignee_ids = defaultAssignees;
             updates.owner_id = defaultAssignees[0];
           }
+          const defaultJobTitles = normalizeTextList(template.default_assignee_job_titles);
+          if (!normalizeTextList(current.assignee_job_titles).length && defaultJobTitles.length) {
+            updates.assignee_job_titles = defaultJobTitles;
+          }
           if (dueDate && (!current.due_date || recurrenceChanged)) updates.due_date = dueDate;
           if (Object.entries(updates).some(([key, value]) => key === "checklist"
             ? JSON.stringify(normalizeChecklist(current[key])) !== JSON.stringify(value)
@@ -752,6 +768,7 @@ async function syncProductActivities() {
           ...structural, checklist: mergeTemplateChecklist(template.checklist, []),
           owner_id: normalizeIdList(template.default_assignee_ids, template.default_owner_id)[0] || null,
           assignee_ids: normalizeIdList(template.default_assignee_ids, template.default_owner_id),
+          assignee_job_titles: normalizeTextList(template.default_assignee_job_titles),
           due_date: dueDate, notes: "", status: "todo",
           created_at: now, updated_at: now
         };
@@ -1269,7 +1286,7 @@ function columns(tab, c) {
         return `<button class="btn checklist-open${complete ? " complete" : ""}" data-id="${esc(row.id)}" title="Abrir checklist">${progress.done}/${progress.total}</button>`;
       } },
       { k: "objective_name", h: "OBJETIVO" },
-      { k: "assignee_ids", h: "RESPONSÁVEIS", fmt: (v, row) => esc(assigneeNames(v, row.owner_id)) },
+      { k: "assignee_ids", h: "RESPONSÁVEIS", fmt: (v, row) => esc(responsibilityNames(v, row.owner_id, row.assignee_job_titles)) },
       { k: "due_date", h: "PRAZO", fmt: (v, row) => `<input class="inline-due-date" type="date" data-id="${esc(row.id)}" value="${esc(v || "")}" title="Alterar prazo">` },
       { k: "status", h: "STATUS", fmt: (v) => badge(v === "done" ? "won" : v === "doing" ? "negotiation" : "lead", TASK_STATUS.find((s) => s.id === v)?.label || "A fazer") },
       { k: "notes", h: "NOTAS", cls: "muted" }];
@@ -1386,6 +1403,70 @@ let state = {
   pages: { contacts: 1, companies: 1, conversations: 1, deals: 1, products: 1, projects: 1, activities: 1 },
   pageSize: 50, kanbanPipelineId: null, calendarCursor: null
 };
+const secondaryTableSelections = new Map();
+
+function secondaryTableSelection(scope) {
+  if (!secondaryTableSelections.has(scope)) secondaryTableSelections.set(scope, new Set());
+  return secondaryTableSelections.get(scope);
+}
+
+function wireSecondaryTableSelection(table, scope) {
+  if (!table || table.querySelector("thead .secondary-select-all")) return;
+  const rows = [...table.querySelectorAll("tbody tr")].filter((row) => row.children.length > 1 && !row.querySelector(".empty"));
+  const selected = secondaryTableSelection(scope);
+  const headRow = table.tHead?.rows?.[0];
+  if (!headRow) return;
+  const head = document.createElement("th");
+  head.className = "select-head noclick";
+  head.innerHTML = '<input type="checkbox" class="secondary-select-all" aria-label="Selecionar linhas visíveis">';
+  headRow.insertBefore(head, headRow.firstChild);
+  rows.forEach((row, index) => {
+    const rowId = String(row.dataset.rowId || row.dataset.id || row.dataset.objectiveId || row.dataset.goalId
+      || row.querySelector("[data-id]")?.dataset.id || `${scope}:${index}`);
+    row.dataset.selectionId = rowId;
+    const cell = document.createElement("td");
+    cell.className = "select-cell";
+    cell.innerHTML = `<input type="checkbox" class="secondary-row-select" aria-label="Selecionar linha"${selected.has(rowId) ? " checked" : ""}>`;
+    row.insertBefore(cell, row.firstChild);
+  });
+  table.querySelectorAll("tbody tr .empty").forEach((cell) => {
+    cell.colSpan = Number(cell.colSpan || headRow.cells.length - 1) + 1;
+  });
+  const host = table.closest("#registrations-root, #project-board-root, #tools-root, #product-activities-root") || table.parentElement;
+  const toolbar = host?.querySelector(".registration-toolbar-left, .project-data-toolbar .registration-toolbar-left, .tools-toolbar .registration-toolbar-left, .modal-toolbar");
+  let count = toolbar?.querySelector(".table-selection-count");
+  if (toolbar && !count) {
+    count = document.createElement("span");
+    count.className = "muted table-selection-count";
+    toolbar.appendChild(count);
+  }
+  const refresh = () => {
+    const visibleRows = rows.filter((row) => !row.hidden);
+    const visibleSelected = visibleRows.filter((row) => selected.has(row.dataset.selectionId));
+    const all = head.querySelector("input");
+    all.checked = Boolean(visibleRows.length && visibleSelected.length === visibleRows.length);
+    all.indeterminate = Boolean(visibleSelected.length && visibleSelected.length < visibleRows.length);
+    rows.forEach((row) => row.classList.toggle("selected", selected.has(row.dataset.selectionId)));
+    if (count) {
+      count.textContent = selected.size ? `${selected.size} selecionado(s)` : "";
+      count.hidden = !selected.size;
+    }
+  };
+  table._refreshSecondarySelection = refresh;
+  table.querySelectorAll(".secondary-row-select").forEach((box) => box.addEventListener("change", () => {
+    const row = box.closest("tr");
+    if (box.checked) selected.add(row.dataset.selectionId); else selected.delete(row.dataset.selectionId);
+    refresh();
+  }));
+  head.querySelector("input").addEventListener("change", (event) => {
+    rows.filter((row) => !row.hidden).forEach((row) => {
+      if (event.target.checked) selected.add(row.dataset.selectionId); else selected.delete(row.dataset.selectionId);
+      row.querySelector(".secondary-row-select").checked = event.target.checked;
+    });
+    refresh();
+  });
+  refresh();
+}
 
 function tabFilters(tab = state.tab) {
   if (!state.filters[tab]) state.filters[tab] = {};
@@ -1884,6 +1965,7 @@ function renderMatrix(c) {
 let productActivityState = { productId: null, editId: null, objectiveEditId: null, goalEditId: null, tab: "activities" };
 let productActivityChecklistDraft = [];
 let productActivityRelatedIds = [];
+let productActivityDraftGroupId = null;
 
 function productActivityIdentity(item) {
   return [item?.group, item?.sector, item?.channel, item?.type, item?.activity, item?.recurrence || "once"]
@@ -1938,6 +2020,10 @@ function renderProductWorkspace() {
   if (productActivityState.tab === "objectives") renderProductObjectives();
   else if (productActivityState.tab === "goals") renderProductGoals();
   else renderProductActivities();
+  wireSecondaryTableSelection(
+    document.querySelector("#product-activities-root table"),
+    `product:${productActivityState.productId}:${productActivityState.tab}`
+  );
 }
 
 function renderProductActivities() {
@@ -1954,7 +2040,7 @@ function renderProductActivities() {
     <td>${normalizeChecklist(item.checklist).length} item(ns)</td>
     <td>${esc(loadProductObjectives().find((objective) => objective.id === item.objective_template_id)?.name || "—")}</td>
     <td>${priorityBadge(item.priority)}</td>
-    <td>${esc(assigneeNames(item.default_assignee_ids, item.default_owner_id))}</td>
+    <td>${esc(responsibilityNames(item.default_assignee_ids, item.default_owner_id, item.default_assignee_job_titles))}</td>
     <td>${esc(dependencyNames(item.dependency_template_ids, item.depends_on_template_id, templates))}</td>
     <td class="act">
       <button class="rowbtn pa-delete" data-id="${esc(item.id)}" title="Desvincular do produto">✕</button>
@@ -2494,8 +2580,11 @@ function openProductActivityDrawer(editId = null, cloneSourceId = null) {
   const editing = templates.find((item) => item.id === editId) || null;
   const cloneSource = templates.find((item) => item.id === cloneSourceId) || null;
   const current = editing || (cloneSource ? { ...cloneSource, id: null, activity: `${cloneSource.activity} (cópia)` } : {});
+  productActivityDraftGroupId = editing?.template_group_id || crypto.randomUUID();
   productActivityRelatedIds = editing
-    ? loadProductActivities().filter((item) => productActivityIdentity(item) === productActivityIdentity(editing)).map((item) => item.id)
+    ? loadProductActivities().filter((item) => item.template_group_id
+      ? item.template_group_id === editing.template_group_id
+      : item.id === editing.id).map((item) => item.id)
     : [];
   const selectedProductIds = new Set(editing
     ? loadProductActivities().filter((item) => productActivityRelatedIds.includes(item.id)).map((item) => item.product_id)
@@ -2505,6 +2594,7 @@ function openProductActivityDrawer(editId = null, cloneSourceId = null) {
   const dependencyOptions = templates.filter((item) => item.id !== editId).map((item) => ({ value: item.id, label: activityDisplayName(item) }));
   const selectedAssignees = new Set(normalizeIdList(current.default_assignee_ids, current.default_owner_id));
   const assigneeOptions = (cache.users || []).map((user) => ({ value: user.id, label: user.full_name || user.name || user.email || user.id }));
+  const selectedJobTitles = new Set(normalizeTextList(current.default_assignee_job_titles));
   const objectiveOptions = ['<option value="">Sem objetivo</option>'].concat(
     loadProductObjectives().filter((item) => item.product_id === productActivityState.productId).map((item) =>
       `<option value="${esc(item.id)}"${item.id === current.objective_template_id ? " selected" : ""}>${esc(item.name)}</option>`)
@@ -2532,6 +2622,7 @@ function openProductActivityDrawer(editId = null, cloneSourceId = null) {
       <div class="field"><label>Checklist</label><div class="checklist-editor" id="pa-checklist"></div><button class="btn checklist-add" id="pa-checklist-add" type="button">+ Item</button></div>
       <div class="field"><label>Objetivo</label><select id="pa-objective">${objectiveOptions}</select></div>
       <div class="field"><label>Responsáveis padrão</label>${multiPickerHtml("pa-assignees", assigneeOptions, selectedAssignees, "Selecionar responsáveis")}</div>
+      <div class="field"><label>Cargos responsáveis</label>${multiPickerHtml("pa-assignee-job-titles", assigneeJobTitleOptions(), selectedJobTitles, "Selecionar cargos")}</div>
       <div class="field"><label>Depende de</label>${multiPickerHtml("pa-dependencies", dependencyOptions, selectedDependencies, "Selecionar dependências")}</div>
     </div>
     <div class="modal-foot"><button class="btn" id="pa-cancel">Cancelar</button><button class="btn primary" id="pa-save">${current.id ? "Salvar" : cloneSource ? "Criar cópia" : "Criar"}</button></div>
@@ -2548,6 +2639,7 @@ function openProductActivityDrawer(editId = null, cloneSourceId = null) {
   });
   wireMultiPicker("pa-products");
   wireMultiPicker("pa-assignees");
+  wireMultiPicker("pa-assignee-job-titles");
   wireMultiPicker("pa-dependencies");
   renderProductActivityChecklistEditor();
   document.getElementById("pa-activity")?.focus();
@@ -2574,6 +2666,7 @@ async function saveProductActivity() {
   const recordId = current?.id || crypto.randomUUID();
   const dependencyIds = multiPickerValues("pa-dependencies");
   const assigneeIds = multiPickerValues("pa-assignees");
+  const assigneeJobTitles = multiPickerValues("pa-assignee-job-titles");
   const selectedProductIds = multiPickerValues("pa-products");
   if (!selectedProductIds.length) { toast("Selecione pelo menos um produto.", true); return; }
   if (createsTemplateDependencyCycle(rows, recordId, dependencyIds)) {
@@ -2594,6 +2687,8 @@ async function saveProductActivity() {
       .filter((item) => item.text),
     default_owner_id: assigneeIds[0] || null,
     default_assignee_ids: assigneeIds,
+    default_assignee_job_titles: assigneeJobTitles,
+    template_group_id: productActivityDraftGroupId || crypto.randomUUID(),
     updated_at: new Date().toISOString()
   };
   try {
@@ -2670,6 +2765,29 @@ function assigneeNames(ids, fallbackId = null) {
     return user?.full_name || user?.name || user?.email || id;
   });
   return names.join(", ") || "—";
+}
+
+function assigneeJobTitleOptions() {
+  return [...new Map((cache?.users || [])
+    .filter((user) => user.status === "active" && String(user.job_title || "").trim())
+    .map((user) => {
+      const title = String(user.job_title).trim();
+      return [title.toLocaleLowerCase("pt-BR"), { value: title, label: title }];
+    })).values()].sort((a, b) => a.label.localeCompare(b.label, "pt-BR", { sensitivity: "base" }));
+}
+
+function responsibilityNames(ids, fallbackId = null, jobTitles = []) {
+  const direct = normalizeIdList(ids, fallbackId).map((id) => {
+    const user = cache?.userById?.[id];
+    return user?.full_name || user?.name || user?.email || id;
+  });
+  const roles = normalizeTextList(jobTitles).map((title) => {
+    const eligible = (cache?.users || []).filter((user) =>
+      user.status === "active" && String(user.job_title || "").trim().toLocaleLowerCase("pt-BR") === title.toLocaleLowerCase("pt-BR")
+    ).map((user) => user.full_name || user.name || user.email).filter(Boolean);
+    return eligible.length ? `Cargo: ${title} (${eligible.join(", ")})` : `Cargo: ${title}`;
+  });
+  return [...new Set([...direct, ...roles])].join(", ") || "—";
 }
 
 function dependencyNames(ids, fallbackId, rows = loadProjectTasks()) {
@@ -2837,7 +2955,7 @@ function renderTaskTable(tasks) {
       <td>${esc(task.type || "—")}</td>
       <td><button class="btn checklist-open${checklist.total > 0 && checklist.done === checklist.total ? " complete" : ""}" data-id="${esc(task.id)}">${checklist.done}/${checklist.total}</button></td>
       <td>${esc(cache.deliveryObjectiveById?.[task.objective_id]?.name || "—")}</td>
-      <td>${esc(assigneeNames(task.assignee_ids, task.owner_id))}</td>
+      <td>${esc(responsibilityNames(task.assignee_ids, task.owner_id, task.assignee_job_titles))}</td>
       <td>${esc(task.due_date ? dt(task.due_date) : "—")}</td>
       <td>${esc(status)}</td>
       <td class="muted">${esc(task.notes || "—")}</td>
@@ -3061,7 +3179,7 @@ function projectSectionValues(item, tasks = []) {
       item.information || "—", item.group || "—", item.sector || "—", item.channel || "—", item.type || "—",
       `${checklist.done}/${checklist.total}`,
       cache.deliveryObjectiveById?.[item.objective_id]?.name || "—",
-      assigneeNames(item.assignee_ids, item.owner_id),
+      responsibilityNames(item.assignee_ids, item.owner_id, item.assignee_job_titles),
       item.due_date ? dt(item.due_date) : "—",
       TASK_STATUS.find((status) => status.id === (item.status || "todo"))?.label || "A fazer",
       item.notes || "—"
@@ -3416,6 +3534,7 @@ function openDeliveryTaskDrawer(projectId, editId = null) {
   const dependencyOptions = tasks.filter((task) => task.id !== editId).map((task) => ({ value: task.id, label: activityDisplayName(task) }));
   const selectedAssignees = new Set(normalizeIdList(current.assignee_ids, current.owner_id));
   const assigneeOptions = (cache.users || []).map((user) => ({ value: user.id, label: user.full_name || user.name || user.email || user.id }));
+  const selectedJobTitles = new Set(normalizeTextList(current.assignee_job_titles));
   const objectiveOptions = ['<option value="">Sem objetivo</option>'].concat(objectives.map((item) =>
     `<option value="${esc(item.id)}"${item.id === current.objective_id ? " selected" : ""}>${esc(item.name)}</option>`)).join("");
   const recurrenceOptions = RECURRENCE_OPTIONS.map(([value, label]) => `<option value="${value}"${value === (current.recurrence || "once") ? " selected" : ""}>${label}</option>`).join("");
@@ -3437,6 +3556,7 @@ function openDeliveryTaskDrawer(projectId, editId = null) {
       <div class="field"><label>Objetivo</label><select id="project-task-objective">${objectiveOptions}</select></div>
       <div class="field"><label>Depende de</label>${multiPickerHtml("project-task-dependencies", dependencyOptions, selectedDependencies, "Selecionar dependências")}</div>
       <div class="field"><label>Responsáveis</label>${multiPickerHtml("project-task-assignees", assigneeOptions, selectedAssignees, "Selecionar responsáveis")}</div>
+      <div class="field"><label>Cargos responsáveis</label>${multiPickerHtml("project-task-assignee-job-titles", assigneeJobTitleOptions(), selectedJobTitles, "Selecionar cargos")}</div>
       <div class="field"><label>Prazo</label><input id="project-task-due" type="date" value="${esc(current.due_date || "")}"></div>
       <div class="field"><label>Notas</label><textarea id="project-task-notes" rows="4">${esc(current.notes || "")}</textarea></div>
     </div><div class="modal-foot"><button class="btn" id="project-task-cancel">Cancelar</button><button class="btn primary" id="project-task-save">${editId ? "Salvar" : "Criar"}</button></div>
@@ -3448,11 +3568,13 @@ function openDeliveryTaskDrawer(projectId, editId = null) {
   document.getElementById("project-task-cancel").addEventListener("click", close);
   wireMultiPicker("project-task-dependencies");
   wireMultiPicker("project-task-assignees");
+  wireMultiPicker("project-task-assignee-job-titles");
   document.getElementById("project-task-save").addEventListener("click", async () => {
     const title = document.getElementById("project-task-title").value.trim();
     if (!title) { toast("Informe a tarefa.", true); return; }
     const dependencyIds = multiPickerValues("project-task-dependencies");
     const assigneeIds = multiPickerValues("project-task-assignees");
+    const assigneeJobTitles = multiPickerValues("project-task-assignee-job-titles");
     if (createsTaskDependencyCycle(tasks, editId, dependencyIds)) { toast("Essa dependência criaria um ciclo entre as tarefas.", true); return; }
     const now = new Date().toISOString();
     const draft = {
@@ -3469,6 +3591,7 @@ function openDeliveryTaskDrawer(projectId, editId = null) {
       dependency_ids: dependencyIds,
       owner_id: assigneeIds[0] || null,
       assignee_ids: assigneeIds,
+      assignee_job_titles: assigneeJobTitles,
       due_date: document.getElementById("project-task-due").value || null,
       notes: document.getElementById("project-task-notes").value.trim(),
       sort_order: editId ? Number(current.sort_order || 0) : Math.max(-1, ...tasks.map((task) => Number(task.sort_order || 0))) + 1,
@@ -3517,12 +3640,16 @@ function applyProjectTableColumnPreferences(table) {
   const headers = Object.fromEntries([...headRow.cells].filter((cell) => cell.dataset.projectColumn).map((cell) => [cell.dataset.projectColumn, cell]));
   const fixedHeaders = [...headRow.cells].filter((cell) => !cell.dataset.projectColumn);
   ordered.forEach((col) => headRow.appendChild(headers[col.k]));
-  fixedHeaders.forEach((cell) => headRow.appendChild(cell));
+  const selectionHeader = fixedHeaders.find((cell) => cell.classList.contains("select-head"));
+  if (selectionHeader) headRow.insertBefore(selectionHeader, headRow.firstChild);
+  fixedHeaders.filter((cell) => cell !== selectionHeader).forEach((cell) => headRow.appendChild(cell));
   projectTableRows(table).forEach((row) => {
     const cells = Object.fromEntries([...row.cells].filter((cell) => cell.dataset.projectColumn).map((cell) => [cell.dataset.projectColumn, cell]));
     const fixedCells = [...row.cells].filter((cell) => !cell.dataset.projectColumn);
     ordered.forEach((col) => { if (cells[col.k]) row.appendChild(cells[col.k]); });
-    fixedCells.forEach((cell) => row.appendChild(cell));
+    const selectionCell = fixedCells.find((cell) => cell.classList.contains("select-cell"));
+    if (selectionCell) row.insertBefore(selectionCell, row.firstChild);
+    fixedCells.filter((cell) => cell !== selectionCell).forEach((cell) => row.appendChild(cell));
   });
   ordered.forEach((col) => {
     const visible = prefs[col.k] !== false;
@@ -3564,6 +3691,7 @@ function wireProjectTableColumns(table) {
     });
   });
   applyProjectTableColumnPreferences(table);
+  wireSecondaryTableSelection(table, `delivery:${projectBoardState.projectId}:${projectBoardState.section}`);
 }
 
 function openProjectColumnFilter(header, key) {
@@ -5271,14 +5399,16 @@ function renderRegistrationsSection() {
     const items = loadProductActivities();
     const groups = new Map();
     items.forEach((item) => {
-      const key = productActivityIdentity(item);
+      const key = item.template_group_id || item.id;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(item);
     });
     const rows = [...groups.values()].map((linked) => {
       const item = linked[0];
       const products = [...new Set(linked.map((candidate) => registrationProductName(candidate.product_id)))].join(", ");
-      const owners = [...new Set(linked.flatMap((candidate) => normalizeIdList(candidate.default_assignee_ids, candidate.default_owner_id)).map((id) => cache.userById[id]?.full_name || cache.userById[id]?.name || id).filter(Boolean))].join(", ") || "—";
+      const owners = [...new Set(linked.map((candidate) => responsibilityNames(
+        candidate.default_assignee_ids, candidate.default_owner_id, candidate.default_assignee_job_titles
+      )).filter((value) => value !== "—"))].join(", ") || "—";
       const objectives = [...new Set(linked.map((candidate) => loadProductObjectives().find((objective) => objective.id === candidate.objective_template_id)?.name).filter(Boolean))].join(", ") || "—";
       const dependencies = [...new Set(linked.flatMap((candidate) => normalizeIdList(candidate.dependency_template_ids, candidate.depends_on_template_id)).map((id) => activityDisplayName(items.find((other) => other.id === id))).filter((name) => name !== "—"))].join(", ") || "—";
       return `<tr><td><strong>${esc(activityDisplayName(item))}</strong></td><td>${esc(products)}</td><td>${esc(item.group || "—")}</td><td>${esc(item.sector || "—")}</td><td>${esc(item.channel || "—")}</td><td>${esc(item.type || "—")}</td><td>${priorityBadge(item.priority)}</td><td>${esc(RECURRENCE_LABEL[item.recurrence] || "Única")}</td><td>${esc(item.information || "—")}</td><td>${normalizeChecklist(item.checklist).length} item(ns)</td><td>${esc(objectives)}</td><td>${esc(owners)}</td><td>${esc(dependencies)}</td><td class="act"><button class="rowbtn reg-template-clone" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Clonar tarefa">⧉</button><button class="rowbtn edit reg-template-edit" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Editar tarefa">✎</button></td></tr>`;
@@ -5378,6 +5508,7 @@ function wireRegistrationTable() {
   });
   applyRegistrationColumnPreferences(table);
   applyRegistrationTableState(table);
+  wireSecondaryTableSelection(table, `registrations:${registrationsState.section}`);
 }
 
 function setupRegistrationToolbar(root, table) {
@@ -5439,12 +5570,16 @@ function applyRegistrationColumnPreferences(table) {
   const headerByKey = Object.fromEntries([...headRow.cells].filter((cell) => cell.dataset.registrationKey).map((cell) => [cell.dataset.registrationKey, cell]));
   const fixedHeaders = [...headRow.cells].filter((cell) => !cell.dataset.registrationKey);
   ordered.forEach((col) => headRow.appendChild(headerByKey[col.k]));
-  fixedHeaders.forEach((cell) => headRow.appendChild(cell));
+  const selectionHeader = fixedHeaders.find((cell) => cell.classList.contains("select-head"));
+  if (selectionHeader) headRow.insertBefore(selectionHeader, headRow.firstChild);
+  fixedHeaders.filter((cell) => cell !== selectionHeader).forEach((cell) => headRow.appendChild(cell));
   registrationTableRows(table).forEach((row) => {
     const cellByKey = Object.fromEntries([...row.cells].filter((cell) => cell.dataset.registrationKey).map((cell) => [cell.dataset.registrationKey, cell]));
     const fixedCells = [...row.cells].filter((cell) => !cell.dataset.registrationKey);
     ordered.forEach((col) => { if (cellByKey[col.k]) row.appendChild(cellByKey[col.k]); });
-    fixedCells.forEach((cell) => row.appendChild(cell));
+    const selectionCell = fixedCells.find((cell) => cell.classList.contains("select-cell"));
+    if (selectionCell) row.insertBefore(selectionCell, row.firstChild);
+    fixedCells.filter((cell) => cell !== selectionCell).forEach((cell) => row.appendChild(cell));
   });
   ordered.forEach((col) => {
     const visible = prefs[col.k] !== false;
@@ -5506,6 +5641,7 @@ function applyRegistrationTableState(table) {
   });
   renderRegistrationFilterBadges(table);
   renderRegistrationPagination(table, filteredRows.length, totalPages);
+  table._refreshSecondarySelection?.();
 }
 
 function renderRegistrationPagination(table, total, totalPages) {
@@ -6238,6 +6374,7 @@ function renderToolEmails(root) {
   }).join("")}</div><button class="filter-clear-all tool-filter-clear-all" type="button"${activeFilters.length < 2 ? " hidden" : ""}><span aria-hidden="true">×</span> Limpar tudo</button></div>`;
   root.innerHTML = `${toolsToolbarHtml(accounts.length, "Criar e-mail pelo CNPJ", "tool-email-add")}${filterStrip}${feedback}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   wireToolsToolbar(root);
+  wireSecondaryTableSelection(root.querySelector("table"), "tools:emails");
   document.getElementById("tool-email-add").addEventListener("click", () => openToolEmailForm());
   root.querySelectorAll(".tool-email-reveal").forEach((button) => button.addEventListener("click", () => toggleToolEmailSecret(button.dataset.id)));
   root.querySelectorAll(".tool-email-copy").forEach((button) => button.addEventListener("click", () => copyToolEmailSecret(button.dataset.id)));
@@ -6318,7 +6455,7 @@ function openToolEmailForm(id = null) {
   const usesServer = APP_VARIANT === "web" && isLive();
   const current = toolEmailRows().find((item) => item.id === id) || {};
   const editingServer = usesServer && Boolean(id);
-  sidePanel(id ? "Editar e-mail" : "Novo e-mail", editingServer ? `<div class="form">
+  const editorHtml = editingServer ? `<div class="form">
     <div class="field full"><label>E-mail</label><input value="${esc(current.email || "")}" disabled></div>
     <div class="field full"><label>Senha registrada no CRM</label><input id="tool-email-password" type="password" value="" autocomplete="new-password" placeholder="Deixe em branco para manter a atual"></div>
     <div class="field full"><label>Tags</label><input id="tool-email-tags" value="${esc((current.tags || []).join(", "))}" placeholder="Excluir, Alterar senha"></div>
@@ -6327,11 +6464,17 @@ function openToolEmailForm(id = null) {
     <div class="field full"><label>CNPJ</label><input id="tool-email-cnpj" value="${esc(current.cnpj || "")}"></div>
     <div class="field full"><label>Cliente</label><input id="tool-email-client" value="${esc(current.client || "")}"></div>
     ${usesServer ? '<div class="field full"><span class="muted">O endereço usará a raiz do CNPJ e a senha será gerada automaticamente.</span></div>' : `<div class="field full"><label>Email</label><input id="tool-email-address" type="email" value="${esc(current.email || "")}"></div><div class="field full"><label>Senha</label><input id="tool-email-password" type="password" value="${esc(current.password || "")}" autocomplete="new-password"></div>`}
-  </div><div class="modal-foot"><button class="btn" id="tool-email-cancel">Cancelar</button><button class="btn primary" id="tool-email-save">${usesServer ? "Criar na HostGator" : "Salvar"}</button></div>`, {
-    closeOnOverlay: true,
-    onClose: () => openToolsModal("emails")
-  });
-  document.getElementById("tool-email-cancel").addEventListener("click", () => openToolsModal("emails"));
+  </div><div class="modal-foot"><button class="btn" id="tool-email-cancel">Cancelar</button><button class="btn primary" id="tool-email-save">${usesServer ? "Criar na HostGator" : "Salvar"}</button></div>`;
+  const toolsModalOpen = Boolean(document.getElementById("tools-root"));
+  const closeEditor = toolsModalOpen
+    ? nestedSidePanel(id ? "Editar e-mail" : "Novo e-mail", editorHtml, { closeOnOverlay: true })
+    : sidePanel(id ? "Editar e-mail" : "Novo e-mail", editorHtml, { closeOnOverlay: true, onClose: () => openToolsModal("emails") });
+  const returnToEmails = () => {
+    closeEditor();
+    if (document.getElementById("tools-root")) renderToolsSection();
+    else openToolsModal("emails");
+  };
+  document.getElementById("tool-email-cancel").addEventListener("click", returnToEmails);
   if (editingServer) {
     document.getElementById("tool-email-save").addEventListener("click", async () => {
       const button = document.getElementById("tool-email-save");
@@ -6345,7 +6488,7 @@ function openToolEmailForm(id = null) {
         if (index >= 0) remoteToolEmails[index] = result.account;
         else remoteToolEmails.unshift(result.account);
         toast("Dados salvos no CRM. A senha da HostGator não foi alterada.");
-        openToolsModal("emails");
+        returnToEmails();
       } catch (err) {
         button.disabled = false;
         button.textContent = "Salvar no CRM";
@@ -6383,7 +6526,7 @@ function openToolEmailForm(id = null) {
           : result.status === "existing_unmanaged"
             ? `E-mail ${result.account.email} já existe. A senha anterior não pode ser recuperada.`
             : `E-mail ${result.account.email} já estava criado.`);
-        openToolsModal("emails");
+        returnToEmails();
       } catch (err) {
         button.disabled = false;
         button.textContent = "Criar na HostGator";
@@ -6408,7 +6551,7 @@ function openToolEmailForm(id = null) {
     else rows.unshift(item);
     saveToolRows(TOOL_EMAILS_KEY, rows);
     toast("E-mail salvo.");
-    openToolsModal("emails");
+    returnToEmails();
   });
 }
 

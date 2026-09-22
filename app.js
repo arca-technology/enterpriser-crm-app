@@ -125,7 +125,11 @@ async function callUserAdmin(action, payload = {}) {
     body: JSON.stringify({ action, ...payload })
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || data.message || `Falha ao gerenciar acesso (${res.status})`);
+  if (!res.ok) {
+    const message = data.error || data.message || `Falha ao gerenciar acesso (${res.status})`;
+    if (res.status === 403) throw new Error(`${message} Sessão atual: ${currentSessionLabel()}. Saia e entre com o acesso administrador.`);
+    throw new Error(message);
+  }
   return data;
 }
 async function signOut() {
@@ -4522,6 +4526,7 @@ function render() {
   if (!cache) return;
   refreshActivityCache();
   document.querySelector('[data-action="log"]')?.toggleAttribute("hidden", !currentUserIsAdmin());
+  document.querySelector('[data-action="registrations"]')?.toggleAttribute("disabled", !currentUserIsAdmin());
   const hasConversationSelection = state.selectedConversations.size > 0;
   const isHome = state.tab === "home";
   document.querySelector(".subbar")?.classList.toggle("home-hidden", isHome);
@@ -5149,6 +5154,7 @@ async function copyText(value) {
   }
 }
 function openUsersModal(editId = null, returnToRegistrations = false) {
+  if (!requireCurrentUserAdmin("Usuários")) return;
   const user = editId && editId !== "new" ? cache.users.find((item) => item.id === editId) : null;
   umReturnToRegistrations = returnToRegistrations;
   if (user) umState = { mode: "form", editId: user.id, full_name: user.full_name || user.name || "", email: user.email || "", phone: user.phone || "", role: user.role || "user", function_name: user.function_name || "", job_title: user.job_title || "", status: user.status || "active", password: "", hasAccess: Boolean(user.auth_user_id) };
@@ -5323,6 +5329,7 @@ const REGISTRATION_LABEL = {
 let registrationsState = { section: "products", tables: {} };
 
 function openRegistrationsModal(section = "products") {
+  if (!requireCurrentUserAdmin("Cadastros")) return;
   registrationsState = { section, tables: {} };
   const headerCenter = `<div class="modal-header-tabs" role="tablist" aria-label="Cadastros">
     ${Object.entries(REGISTRATION_LABEL).map(([id, label]) => `<button class="modal-header-tab${id === section ? " active" : ""}" data-registration-tab="${id}" role="tab">${label}</button>`).join("")}
@@ -6129,6 +6136,17 @@ function currentUserIsAdmin() {
   return !isLive() || currentProfile?.role === "admin";
 }
 
+function currentSessionLabel() {
+  const session = readAuthSession();
+  return currentProfile?.full_name || currentProfile?.email || session?.user?.email || "conta não identificada";
+}
+
+function requireCurrentUserAdmin(area = "Esta área") {
+  if (currentUserIsAdmin()) return true;
+  toast(`${area} disponível apenas para administradores. Sessão atual: ${currentSessionLabel()}.`, true);
+  return false;
+}
+
 const TOOL_FOLDERS_KEY = "crm_tool_folders";
 const TOOL_EMAILS_KEY = "crm_tool_emails";
 const TOOL_COLUMN_DEFS = {
@@ -6627,7 +6645,7 @@ function handleAction(action) {
   if (action === "tools" || action === "files") { openToolsModal(); return; }
   if (action === "updates") { openUpdatesModal(); return; }
   if (action === "pipeline") { openPipelinesModal(); return; }
-  if (action === "registrations") { openRegistrationsModal(); return; }
+  if (action === "registrations") { if (requireCurrentUserAdmin("Cadastros")) openRegistrationsModal(); return; }
   if (action === "users") { openUsersModal(); return; }
   if (action === "notifications") {
     sidePanel("Notificações", `<div class="panel-list">Nenhuma notificação por enquanto.</div>`, { closeOnOverlay: true });

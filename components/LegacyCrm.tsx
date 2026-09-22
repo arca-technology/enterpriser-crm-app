@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { legacyConfig } from "./legacy-config";
 import { legacyMarkup } from "./legacy-markup";
 
-export function LegacyCrm() {
+export function LegacyCrm({ assetVersion }: { assetVersion: string }) {
   const [configReady, setConfigReady] = useState(false);
 
   useEffect(() => {
@@ -16,7 +16,7 @@ export function LegacyCrm() {
   return (
     <>
       <div id="legacy-root" dangerouslySetInnerHTML={{ __html: legacyMarkup }} />
-      {configReady ? <Script src="/legacy/app.js" strategy="afterInteractive" /> : null}
+      {configReady ? <Script src={`/legacy/app.js?v=${encodeURIComponent(assetVersion)}`} strategy="afterInteractive" /> : null}
     </>
   );
 }

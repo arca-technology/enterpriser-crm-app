@@ -339,11 +339,12 @@ async function deleteRow(table, id) {
 
 async function emailAccountsRequest(method = "GET", body = null) {
   if (APP_VARIANT !== "web" || !isLive()) throw new Error("A criação automática de e-mail está disponível na versão web conectada.");
+  const c = getCfg();
   const token = await getAccessToken();
   if (!token) throw new Error("Sua sessão expirou. Entre novamente.");
-  const response = await fetch("/api/email-accounts", {
+  const response = await fetch(`${c.url}/functions/v1/provision-client-email`, {
     method,
-    headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+    headers: { apikey: c.anonKey, Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
     body: body ? JSON.stringify(body) : undefined
   });
   const data = await response.json().catch(() => ({}));

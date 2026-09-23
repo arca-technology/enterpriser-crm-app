@@ -86,7 +86,9 @@ async function authRequest(path, body, accessToken = null) {
     const data = await res.json().catch(() => null);
     throw new Error(data?.msg || data?.error_description || data?.message || `Falha de autenticação (${res.status})`);
   }
-  return res.status === 204 ? null : res.json();
+  if (res.status === 204) return null;
+  const text = await res.text();
+  return text.trim() ? JSON.parse(text) : null;
 }
 async function getAccessToken() {
   if (!isLive()) return null;
@@ -1336,6 +1338,14 @@ function refOptions(ref, c) {
   return (c[ref] || []).map((r) => ({ value: r[pk(ref)], label: r.name || r.legal_name || r.full_name || r.title || r[pk(ref)] }));
 }
 
+function companyRefOptions(c) {
+  return (c.companies || []).map((company) => ({
+    value: company.tax_id,
+    label: company.trade_name || company.legal_name || company.tax_id,
+    search: [company.trade_name, company.legal_name, company.tax_id].filter(Boolean).join(" ")
+  }));
+}
+
 function companyNames(ids, c = cache) {
   return normalizeIdList(ids).map((id) => c?.companyById?.[id]?.trade_name || c?.companyById?.[id]?.legal_name || id).join(", ") || "—";
 }
@@ -1375,7 +1385,7 @@ function fields(tab, c) {
       { k: "contact_type", label: "Tipo de contato" },
       { k: "channel", label: "Canal" },
       { k: "job_title", label: "Cargo" },
-      { k: "company_ids", label: "Empresa(s)", type: "multi", options: refOptions("companies", c), full: true, placeholder: "Selecionar empresas" },
+      { k: "company_ids", label: "Empresa(s)", type: "multi", options: companyRefOptions(c), full: true, placeholder: "Buscar por nome ou CNPJ", searchOnly: true },
       { k: "linkedin", label: "LinkedIn" },
       { k: "facebook", label: "Facebook" },
       { k: "instagram", label: "Instagram" },
@@ -1396,7 +1406,7 @@ function fields(tab, c) {
       { k: "status", label: "Status", type: "select", options: [{ value: "Ativo", label: "Ativo" }, { value: "Pausado", label: "Pausado" }, { value: "Inativo", label: "Inativo" }], def: "Ativo" }];
     case "deals": return [
       { k: "title", label: "Título", req: true, full: true },
-      { k: "company_id", label: "Empresa", type: "select", options: refOptions("companies", c), req: true },
+      { k: "company_id", label: "Empresa", type: "search", options: companyRefOptions(c), req: true, full: true, placeholder: "Buscar por nome ou CNPJ" },
       { k: "contact_id", label: "Contato", type: "select", options: refOptions("contacts", c) },
       { k: "product_id", label: "Produto", type: "select", options: refOptions("products", c) },
       { k: "owner_id", label: "Responsável", type: "select", options: refOptions("users", c) },
@@ -1410,7 +1420,7 @@ function fields(tab, c) {
       { k: "name", label: "Entrega", full: true, generated: true },
       { k: "group_name", label: "Grupo" },
       { k: "delivery_type", label: "Tipo", type: "select", options: ["Projeto", "Imersão", "Treinamento", "Consultoria", "Evento", "Serviço recorrente", "Outro"].map((value) => ({ value, label: value })), def: "Projeto" },
-      { k: "company_id", label: "Empresa", type: "select", options: refOptions("companies", c), req: true },
+      { k: "company_id", label: "Empresa", type: "search", options: companyRefOptions(c), req: true, full: true, placeholder: "Buscar por nome ou CNPJ" },
       { k: "client_name", label: "Cliente", req: true },
       { k: "product_id", label: "Produto", type: "select", options: refOptions("products", c), req: true },
       { k: "status", label: "Status", type: "select", options: PROJECT_STATUSES.map((s) => ({ value: s, label: PROJECT_STATUS_LABEL[s] })), def: "planned" },
@@ -2831,12 +2841,12 @@ function dependencyNames(ids, fallbackId, rows = loadProjectTasks()) {
   return names.join(", ") || "—";
 }
 
-function multiPickerHtml(id, options, selectedIds, placeholder) {
+function multiPickerHtml(id, options, selectedIds, placeholder, searchOnly = false) {
   const selected = new Set(selectedIds);
-  const rows = options.map((option) => `<button type="button" class="multi-picker-option${selected.has(option.value) ? " active" : ""}" data-value="${esc(option.value)}" data-label="${esc(option.label)}"><span>${esc(option.label)}</span><b>✓</b></button>`).join("");
-  return `<div class="multi-picker" id="${esc(id)}" data-placeholder="${esc(placeholder)}">
+  const rows = options.map((option) => `<button type="button" class="multi-picker-option${selected.has(option.value) ? " active" : ""}" data-value="${esc(option.value)}" data-label="${esc(option.label)}" data-search="${esc(option.search || [option.label, option.value].join(" "))}"><span>${esc(option.label)}</span><small>${esc(option.value)}</small><b>✓</b></button>`).join("");
+  return `<div class="multi-picker" id="${esc(id)}" data-placeholder="${esc(placeholder)}" data-search-only="${searchOnly}">
     <div class="multi-picker-control" role="button" tabindex="0" aria-expanded="false"><div class="multi-picker-selection"></div><span class="multi-picker-chevron">▾</span></div>
-    <div class="multi-picker-menu" hidden><input class="multi-picker-search" type="search" placeholder="Buscar..."><div class="multi-picker-options">${rows || '<div class="multi-picker-empty">Nenhuma opção disponível.</div>'}</div></div>
+    <div class="multi-picker-menu" hidden><input class="multi-picker-search" type="search" placeholder="${searchOnly ? "Digite o nome ou CNPJ..." : "Buscar..."}"><div class="multi-picker-search-hint"${searchOnly ? "" : " hidden"}>Digite para pesquisar.</div><div class="multi-picker-options">${rows || '<div class="multi-picker-empty">Nenhuma opção disponível.</div>'}</div></div>
   </div>`;
 }
 
@@ -2850,6 +2860,18 @@ function wireMultiPicker(id) {
   const control = root.querySelector(".multi-picker-control");
   const menu = root.querySelector(".multi-picker-menu");
   const search = root.querySelector(".multi-picker-search");
+  const searchOnly = root.dataset.searchOnly === "true";
+  const filterOptions = () => {
+    const query = search.value.trim().toLocaleLowerCase("pt-BR");
+    const queryDigits = query.replace(/\D/g, "");
+    root.querySelectorAll(".multi-picker-option").forEach((option) => {
+      const haystack = [option.dataset.label, option.dataset.value, option.dataset.search].join(" ").toLocaleLowerCase("pt-BR");
+      const digitMatch = queryDigits.length >= 3 && option.dataset.value.replace(/\D/g, "").includes(queryDigits);
+      const matches = haystack.includes(query) || digitMatch;
+      option.hidden = searchOnly ? !query || !matches : Boolean(query && !matches);
+    });
+    root.querySelector(".multi-picker-search-hint")?.toggleAttribute("hidden", !searchOnly || Boolean(query));
+  };
   const drawSelection = () => {
     const active = [...root.querySelectorAll(".multi-picker-option.active")];
     root.querySelector(".multi-picker-selection").innerHTML = active.length
@@ -2865,17 +2887,70 @@ function wireMultiPicker(id) {
     document.querySelectorAll(".multi-picker-menu:not([hidden])").forEach((other) => { if (other !== menu) other.hidden = true; });
     menu.hidden = open == null ? !menu.hidden : !open;
     control.setAttribute("aria-expanded", String(!menu.hidden));
-    if (!menu.hidden) { search.value = ""; root.querySelectorAll(".multi-picker-option").forEach((option) => { option.hidden = false; }); search.focus(); }
+    if (!menu.hidden) { search.value = ""; filterOptions(); search.focus(); }
   };
   control.addEventListener("click", () => toggleMenu());
   control.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggleMenu(); } });
   root.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.stopPropagation(); toggleMenu(false); control.focus(); } });
   root.querySelectorAll(".multi-picker-option").forEach((option) => option.addEventListener("click", () => { option.classList.toggle("active"); drawSelection(); }));
-  search.addEventListener("input", () => {
-    const query = search.value.trim().toLocaleLowerCase("pt-BR");
-    root.querySelectorAll(".multi-picker-option").forEach((option) => { option.hidden = Boolean(query && !option.dataset.label.toLocaleLowerCase("pt-BR").includes(query)); });
+  search.addEventListener("input", filterOptions);
+  search.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    const first = [...root.querySelectorAll(".multi-picker-option:not([hidden])")][0];
+    if (first) { event.preventDefault(); first.click(); search.value = ""; filterOptions(); search.focus(); }
   });
   drawSelection();
+}
+
+function singleSearchPickerHtml(id, options, value, placeholder) {
+  const selected = options.find((option) => String(option.value) === String(value || ""));
+  const rows = options.map((option) => `<button type="button" class="single-search-option" data-value="${esc(option.value)}" data-label="${esc(option.label)}" data-search="${esc(option.search || [option.label, option.value].join(" "))}" hidden><span>${esc(option.label)}</span><small>${esc(option.value)}</small></button>`).join("");
+  return `<div class="single-search-picker" id="${esc(id)}">
+    <input class="single-search-input" type="search" value="${esc(selected?.label || "")}" placeholder="${esc(placeholder || "Buscar...")}" autocomplete="off">
+    <input type="hidden" data-k="${esc(id.replace(/^form-/, ""))}" value="${esc(value || "")}">
+    <div class="single-search-menu" hidden><div class="single-search-hint">Digite o nome ou CNPJ.</div>${rows}</div>
+  </div>`;
+}
+
+function wireSingleSearchPicker(id) {
+  const root = document.getElementById(id);
+  if (!root) return;
+  const input = root.querySelector(".single-search-input");
+  const hidden = root.querySelector('input[type="hidden"]');
+  const menu = root.querySelector(".single-search-menu");
+  const options = [...root.querySelectorAll(".single-search-option")];
+  const filter = () => {
+    const query = input.value.trim().toLocaleLowerCase("pt-BR");
+    const queryDigits = query.replace(/\D/g, "");
+    let visible = 0;
+    options.forEach((option) => {
+      const haystack = [option.dataset.label, option.dataset.value, option.dataset.search].join(" ").toLocaleLowerCase("pt-BR");
+      const digitMatch = queryDigits.length >= 3 && option.dataset.value.replace(/\D/g, "").includes(queryDigits);
+      option.hidden = !query || !(haystack.includes(query) || digitMatch);
+      if (!option.hidden) visible++;
+    });
+    const exact = options.find((option) =>
+      option.dataset.label.toLocaleLowerCase("pt-BR") === query
+        || option.dataset.value.toLocaleLowerCase("pt-BR") === query
+        || (queryDigits.length === 14 && option.dataset.value.replace(/\D/g, "") === queryDigits)
+    );
+    hidden.value = exact?.dataset.value || "";
+    menu.hidden = !query;
+    root.querySelector(".single-search-hint").textContent = visible ? "Selecione uma empresa." : "Nenhuma empresa encontrada.";
+  };
+  options.forEach((option) => option.addEventListener("click", () => {
+    input.value = option.dataset.label;
+    hidden.value = option.dataset.value;
+    menu.hidden = true;
+  }));
+  input.addEventListener("input", filter);
+  input.addEventListener("focus", filter);
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    const first = options.find((option) => !option.hidden);
+    if (first) { event.preventDefault(); first.click(); }
+  });
+  root.addEventListener("focusout", () => setTimeout(() => { if (!root.contains(document.activeElement)) menu.hidden = true; }, 0));
 }
 
 document.addEventListener("click", (event) => {
@@ -4734,7 +4809,9 @@ function openForm(tab, id, opts = {}) {
     const isLocked = Boolean(f.generated);
     let ctrl;
     if (f.type === "multi") {
-      ctrl = multiPickerHtml(`form-${f.k}`, f.options || [], new Set(normalizeIdList(val)), f.placeholder || "Selecionar");
+      ctrl = multiPickerHtml(`form-${f.k}`, f.options || [], new Set(normalizeIdList(val)), f.placeholder || "Selecionar", Boolean(f.searchOnly));
+    } else if (f.type === "search") {
+      ctrl = singleSearchPickerHtml(`form-${f.k}`, f.options || [], val, f.placeholder);
     } else if (f.searchableRef) {
       const selected = f.options.find((option) => option.value === val);
       const listId = `search-${f.k}-options`;
@@ -4785,6 +4862,7 @@ function openForm(tab, id, opts = {}) {
   document.getElementById("cancel").addEventListener("click", returnToPrevious);
   document.getElementById("save").addEventListener("click", () => saveForm(tab, id, fs, opts));
   fs.filter((field) => field.type === "multi").forEach((field) => wireMultiPicker(`form-${field.k}`));
+  fs.filter((field) => field.type === "search").forEach((field) => wireSingleSearchPicker(`form-${field.k}`));
   document.querySelectorAll("#modal-root [data-search-ref]").forEach((input) => {
     const field = fs.find((item) => item.k === input.dataset.searchTarget);
     const hidden = document.querySelector(`#modal-root [data-k="${input.dataset.searchTarget}"]`);
@@ -5110,7 +5188,7 @@ function helpContentHtml() {
       <li><b>Arquivos:</b> catálogo de atalhos para pastas, como links do Google Drive, com nome e descrição. O CRM guarda o link, não copia os arquivos.</li>
       <li><b>E-mails:</b> ao criar uma entrega, o CRM cria automaticamente na HostGator uma conta formada pela raiz do CNPJ em <b>@ecommerce365.com.br</b>. A senha pode ser revelada ou copiada nesta tela.</li>
       <li><b>Processos:</b> biblioteca de treinamento organizada por nome, categoria e tags. Cada etapa registra sistema, módulo, submódulo, grupo, tipo, URL e detalhes. O botão de fluxo agrupa as etapas visualmente por módulo, submódulo e grupo.</li>
-      <li><b>Documentação:</b> apresentações textuais em slides, com título, páginas, negrito, itálico, cores e alinhamento. Use para políticas, orientações e materiais de treinamento.</li>
+      <li><b>Documentação:</b> apresentações textuais em slides, com título, páginas, negrito, itálico, cores e alinhamento. Os slides podem ser separados em grupos recolhíveis e os grupos podem ser reordenados por arraste ou pelas setas.</li>
       <li>Busca, classificação, filtros e seleção de colunas funcionam nas tabelas de E-mails, Processos e Documentação.</li>
     </ul><p class="help-note"><b>Segurança:</b> as credenciais de e-mail são compartilhadas entre os usuários ativos do CRM e a senha permanece criptografada no Supabase. Processos e documentos podem ser consultados por usuários ativos e alterados apenas por administradores. Os links de Arquivos continuam salvos somente neste navegador.</p></section>
 
@@ -6599,8 +6677,18 @@ function normalizeDocumentSlides(value, fallbackContent = "", fallbackTitle = ""
     id: String(slide?.id || crypto.randomUUID()),
     title: String(slide?.title || `Slide ${index + 1}`).trim(),
     html: sanitizeDocumentHtml(slide?.html || ""),
-    background: CSS.supports("color", String(slide?.background || "")) ? String(slide.background) : "#ffffff"
+    background: CSS.supports("color", String(slide?.background || "")) ? String(slide.background) : "#ffffff",
+    group: String(slide?.group || "Geral").trim() || "Geral"
   }));
+}
+
+function documentSlideGroups(slides) {
+  const groups = new Map();
+  slides.forEach((slide, index) => {
+    if (!groups.has(slide.group)) groups.set(slide.group, []);
+    groups.get(slide.group).push({ slide, index });
+  });
+  return [...groups.entries()].map(([name, items]) => ({ name, items }));
 }
 
 function documentSlideText(slides) {
@@ -6699,13 +6787,22 @@ function openToolDocument(id) {
   </div><div class="modal-foot"><button class="btn" id="tool-document-close">Fechar</button>${currentUserIsAdmin() ? '<button class="btn primary" id="tool-document-detail-edit">Editar</button>' : ""}</div>`;
   const closePanel = nestedCenterModal(documentItem.title, content, { cls: "full document-viewer-modal", closeOnOverlay: true });
   let activeIndex = 0;
+  const collapsedGroups = new Set();
   const draw = () => {
     const slide = slides[activeIndex];
-    document.getElementById("document-viewer-list").innerHTML = slides.map((item, index) => `<button class="document-slide-thumb${index === activeIndex ? " active" : ""}" data-index="${index}"><span>${index + 1}</span><b>${esc(item.title)}</b></button>`).join("");
+    document.getElementById("document-viewer-list").innerHTML = documentSlideGroups(slides).map((group) => `<section class="document-slide-group">
+      <button class="document-group-toggle" data-group="${esc(group.name)}"><span>${collapsedGroups.has(group.name) ? "▸" : "▾"}</span><b>${esc(group.name)}</b><small>${group.items.length}</small></button>
+      <div class="document-group-slides"${collapsedGroups.has(group.name) ? " hidden" : ""}>${group.items.map(({ slide: item, index }) => `<button class="document-slide-thumb${index === activeIndex ? " active" : ""}" data-index="${index}"><span>${index + 1}</span><b>${esc(item.title)}</b></button>`).join("")}</div>
+    </section>`).join("");
     const stage = document.getElementById("document-viewer-slide");
     stage.style.background = slide.background;
     stage.innerHTML = `<h2>${esc(slide.title)}</h2><div class="document-slide-body">${sanitizeDocumentHtml(slide.html)}</div>`;
     document.querySelectorAll("#document-viewer-list .document-slide-thumb").forEach((button) => button.addEventListener("click", () => { activeIndex = Number(button.dataset.index); draw(); }));
+    document.querySelectorAll("#document-viewer-list .document-group-toggle").forEach((button) => button.addEventListener("click", () => {
+      const group = button.dataset.group;
+      if (collapsedGroups.has(group)) collapsedGroups.delete(group); else collapsedGroups.add(group);
+      draw();
+    }));
   };
   draw();
   document.getElementById("tool-document-close").addEventListener("click", closePanel);
@@ -6734,11 +6831,12 @@ function openToolDocumentForm(id = null) {
       <button class="tool-icon-btn document-format" data-command="justifyFull" title="Justificar">☰</button>
     </div>
     <div class="document-editor-workspace">
-      <aside class="document-slide-list"><div id="document-editor-list"></div><button class="btn document-add-slide" id="document-add-slide">+ Slide</button></aside>
+      <aside class="document-slide-list"><div id="document-editor-list"></div><div class="document-slide-list-actions"><button class="btn document-add-slide" id="document-add-slide">+ Slide</button><button class="btn document-add-slide" id="document-add-group">+ Grupo</button></div></aside>
       <main class="document-stage-wrap"><div class="document-slide document-slide-edit" id="document-editor-slide"><input id="document-slide-title" placeholder="Título do slide"><div id="document-slide-body" class="document-slide-body" contenteditable="true" data-placeholder="Digite o conteúdo do slide..."></div></div></main>
     </div>
   </div><div class="modal-foot"><button class="btn danger" id="document-delete-slide">Excluir slide</button><button class="btn" id="tool-document-cancel">Cancelar</button><button class="btn primary" id="tool-document-save">Salvar</button></div>`;
   const closePanel = nestedCenterModal(id ? "Editar documentação" : "Nova documentação", content, { cls: "full document-editor-modal", closeOnOverlay: true });
+  const collapsedGroups = new Set();
   const persistActiveSlide = () => {
     const slide = slides[activeIndex];
     if (!slide) return;
@@ -6748,7 +6846,11 @@ function openToolDocumentForm(id = null) {
   };
   const drawEditor = () => {
     const slide = slides[activeIndex];
-    document.getElementById("document-editor-list").innerHTML = slides.map((item, index) => `<button class="document-slide-thumb${index === activeIndex ? " active" : ""}" data-index="${index}"><span>${index + 1}</span><b>${esc(item.title || `Slide ${index + 1}`)}</b></button>`).join("");
+    const groups = documentSlideGroups(slides);
+    document.getElementById("document-editor-list").innerHTML = groups.map((group, groupIndex) => `<section class="document-slide-group" data-group="${esc(group.name)}" draggable="true">
+      <div class="document-group-head"><button class="document-group-toggle" data-group="${esc(group.name)}"><span>${collapsedGroups.has(group.name) ? "▸" : "▾"}</span><b>${esc(group.name)}</b><small>${group.items.length}</small></button><span class="document-group-actions"><button class="tool-icon-btn document-group-up" data-group="${esc(group.name)}" title="Subir grupo"${groupIndex === 0 ? " disabled" : ""}>↑</button><button class="tool-icon-btn document-group-down" data-group="${esc(group.name)}" title="Descer grupo"${groupIndex === groups.length - 1 ? " disabled" : ""}>↓</button></span></div>
+      <div class="document-group-slides"${collapsedGroups.has(group.name) ? " hidden" : ""}>${group.items.map(({ slide: item, index }) => `<button class="document-slide-thumb${index === activeIndex ? " active" : ""}" data-index="${index}"><span>${index + 1}</span><b>${esc(item.title || `Slide ${index + 1}`)}</b></button>`).join("")}</div>
+    </section>`).join("");
     document.getElementById("document-slide-title").value = slide.title;
     document.getElementById("document-slide-body").innerHTML = sanitizeDocumentHtml(slide.html);
     document.getElementById("document-editor-slide").style.background = slide.background;
@@ -6757,6 +6859,46 @@ function openToolDocumentForm(id = null) {
     document.querySelectorAll("#document-editor-list .document-slide-thumb").forEach((button) => button.addEventListener("click", () => {
       persistActiveSlide(); activeIndex = Number(button.dataset.index); drawEditor();
     }));
+    document.querySelectorAll("#document-editor-list .document-group-toggle").forEach((button) => button.addEventListener("click", () => {
+      persistActiveSlide();
+      const group = button.dataset.group;
+      if (collapsedGroups.has(group)) collapsedGroups.delete(group); else collapsedGroups.add(group);
+      drawEditor();
+    }));
+    const moveGroup = (name, direction) => {
+      persistActiveSlide();
+      const activeId = slides[activeIndex].id;
+      const ordered = documentSlideGroups(slides);
+      const from = ordered.findIndex((group) => group.name === name);
+      const to = from + direction;
+      if (from < 0 || to < 0 || to >= ordered.length) return;
+      [ordered[from], ordered[to]] = [ordered[to], ordered[from]];
+      slides = ordered.flatMap((group) => group.items.map((item) => item.slide));
+      activeIndex = slides.findIndex((item) => item.id === activeId);
+      drawEditor();
+    };
+    document.querySelectorAll("#document-editor-list .document-group-up").forEach((button) => button.addEventListener("click", () => moveGroup(button.dataset.group, -1)));
+    document.querySelectorAll("#document-editor-list .document-group-down").forEach((button) => button.addEventListener("click", () => moveGroup(button.dataset.group, 1)));
+    document.querySelectorAll("#document-editor-list .document-slide-group").forEach((groupElement) => {
+      groupElement.addEventListener("dragstart", (event) => event.dataTransfer.setData("text/plain", groupElement.dataset.group));
+      groupElement.addEventListener("dragover", (event) => event.preventDefault());
+      groupElement.addEventListener("drop", (event) => {
+        event.preventDefault();
+        const source = event.dataTransfer.getData("text/plain");
+        const target = groupElement.dataset.group;
+        if (!source || source === target) return;
+        persistActiveSlide();
+        const activeId = slides[activeIndex].id;
+        const ordered = documentSlideGroups(slides);
+        const from = ordered.findIndex((group) => group.name === source);
+        const to = ordered.findIndex((group) => group.name === target);
+        const [moved] = ordered.splice(from, 1);
+        ordered.splice(to, 0, moved);
+        slides = ordered.flatMap((group) => group.items.map((item) => item.slide));
+        activeIndex = slides.findIndex((item) => item.id === activeId);
+        drawEditor();
+      });
+    });
   };
   drawEditor();
   document.getElementById("document-slide-title").addEventListener("input", (event) => {
@@ -6778,7 +6920,19 @@ function openToolDocumentForm(id = null) {
   }));
   document.getElementById("document-add-slide").addEventListener("click", () => {
     persistActiveSlide();
-    slides.push({ id: crypto.randomUUID(), title: `Slide ${slides.length + 1}`, html: "", background: "#ffffff" });
+    const group = slides[activeIndex]?.group || "Geral";
+    slides.push({ id: crypto.randomUUID(), title: `Slide ${slides.length + 1}`, html: "", background: "#ffffff", group });
+    activeIndex = slides.length - 1;
+    drawEditor();
+  });
+  document.getElementById("document-add-group").addEventListener("click", () => {
+    persistActiveSlide();
+    const name = window.prompt("Nome do novo grupo:")?.trim();
+    if (!name) return;
+    if (slides.some((slide) => slide.group.toLocaleLowerCase("pt-BR") === name.toLocaleLowerCase("pt-BR"))) {
+      toast("Já existe um grupo com esse nome.", true); return;
+    }
+    slides.push({ id: crypto.randomUUID(), title: `Slide ${slides.length + 1}`, html: "", background: "#ffffff", group: name });
     activeIndex = slides.length - 1;
     drawEditor();
   });

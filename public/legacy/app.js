@@ -225,7 +225,8 @@ const REMOTE_TABLE = {
   productGoals: "product_goal_templates",
   deliveryObjectives: "delivery_objectives",
   deliveryGoals: "delivery_goals",
-  processes: "training_processes"
+  processes: "training_processes",
+  documents: "company_documents"
 };
 const remoteTable = (tab) => REMOTE_TABLE[tab] || tab;
 const FIELD_REMAP = {
@@ -298,7 +299,8 @@ const DEMO = {
   productGoals: [],
   deliveryObjectives: [],
   deliveryGoals: [],
-  processes: []
+  processes: [],
+  documents: []
 };
 
 // ---------- REST Supabase ----------
@@ -5034,8 +5036,9 @@ function helpContentHtml() {
       <li><b>Arquivos:</b> catálogo de atalhos para pastas, como links do Google Drive, com nome e descrição. O CRM guarda o link, não copia os arquivos.</li>
       <li><b>E-mails:</b> ao criar uma entrega, o CRM cria automaticamente na HostGator uma conta formada pela raiz do CNPJ em <b>@ecommerce365.com.br</b>. A senha pode ser revelada ou copiada nesta tela.</li>
       <li><b>Processos:</b> biblioteca de treinamento organizada por nome, categoria e tags. Cada etapa registra sistema, módulo, submódulo, grupo, tipo, URL e detalhes. O botão de fluxo agrupa as etapas visualmente por módulo, submódulo e grupo.</li>
-      <li>Busca, classificação, filtros e seleção de colunas funcionam nas tabelas de E-mails e Processos.</li>
-    </ul><p class="help-note"><b>Segurança:</b> as credenciais de e-mail são compartilhadas entre os usuários ativos do CRM e a senha permanece criptografada no Supabase. Processos podem ser consultados por usuários ativos e alterados apenas por administradores. Os links de Arquivos continuam salvos somente neste navegador.</p></section>
+      <li><b>Documentação:</b> base interna da empresa com título, categoria, tags e conteúdo. Use para registrar políticas, orientações e materiais de apoio aos treinamentos.</li>
+      <li>Busca, classificação, filtros e seleção de colunas funcionam nas tabelas de E-mails, Processos e Documentação.</li>
+    </ul><p class="help-note"><b>Segurança:</b> as credenciais de e-mail são compartilhadas entre os usuários ativos do CRM e a senha permanece criptografada no Supabase. Processos e documentos podem ser consultados por usuários ativos e alterados apenas por administradores. Os links de Arquivos continuam salvos somente neste navegador.</p></section>
 
     <section class="help-section" id="help-admin"><h4>Administração e suporte</h4><ul>
       <li><b>LOG:</b> administradores consultam as alterações recentes registradas nas principais entidades.</li>
@@ -6180,6 +6183,10 @@ const TOOL_COLUMN_DEFS = {
   processes: [
     { k: "title", h: "Nome do processo" }, { k: "category", h: "Categoria" },
     { k: "tags", h: "Tags" }, { k: "steps", h: "Etapas" }
+  ],
+  documents: [
+    { k: "title", h: "Título" }, { k: "category", h: "Categoria" },
+    { k: "tags", h: "Tags" }, { k: "updated_at", h: "Atualizado em" }
   ]
 };
 let toolsState = { section: "files", search: "", tables: {} };
@@ -6191,6 +6198,10 @@ let remoteToolProcesses = [];
 let remoteToolProcessesLoaded = false;
 let remoteToolProcessesLoading = false;
 let remoteToolProcessesError = "";
+let remoteToolDocuments = [];
+let remoteToolDocumentsLoaded = false;
+let remoteToolDocumentsLoading = false;
+let remoteToolDocumentsError = "";
 
 function readToolRows(key) {
   try {
@@ -6222,6 +6233,7 @@ function openToolsModal(section = "files") {
     <button class="modal-header-tab${section === "files" ? " active" : ""}" data-tools-tab="files" role="tab">Arquivos</button>
     <button class="modal-header-tab${section === "emails" ? " active" : ""}" data-tools-tab="emails" role="tab">Emails</button>
     <button class="modal-header-tab${section === "processes" ? " active" : ""}" data-tools-tab="processes" role="tab">Processos</button>
+    <button class="modal-header-tab${section === "documents" ? " active" : ""}" data-tools-tab="documents" role="tab">Documentação</button>
   </div>`;
   shell("Ferramentas", `<div id="tools-root" class="tools-root"></div>${toolsDisabledFooter()}`, {
     cls: "full registrations-modal",
@@ -6274,7 +6286,7 @@ function wireToolsToolbar(root) {
     event.stopPropagation();
     openSecondaryColumnManager({
       scope: `tools:${toolsState.section}`,
-      label: toolsState.section === "files" ? "Arquivos" : toolsState.section === "emails" ? "Emails" : "Processos",
+      label: toolsState.section === "files" ? "Arquivos" : toolsState.section === "emails" ? "Emails" : toolsState.section === "processes" ? "Processos" : "Documentação",
       definitions: TOOL_COLUMN_DEFS[toolsState.section],
       onChange: renderToolsSection
     });
@@ -6286,6 +6298,7 @@ function renderToolsSection() {
   if (!root) return;
   if (toolsState.section === "emails") renderToolEmails(root);
   else if (toolsState.section === "processes") renderToolProcesses(root);
+  else if (toolsState.section === "documents") renderToolDocuments(root);
   else renderToolFolders(root);
 }
 
@@ -6410,10 +6423,10 @@ async function loadRemoteToolProcesses() {
   }
 }
 
-function processFilterStrip(tableState) {
+function toolFilterStrip(section, tableState) {
   const activeFilters = Object.entries(tableState.filters).filter(([, values]) => values?.size);
   return `<div class="registration-filter-strip"><div class="registration-filter-badges">${activeFilters.map(([key, values]) => {
-    const label = TOOL_COLUMN_DEFS.processes.find((col) => col.k === key)?.h || key;
+    const label = TOOL_COLUMN_DEFS[section].find((col) => col.k === key)?.h || key;
     return `<button class="registration-filter-badge tool-filter-badge" data-key="${esc(key)}" title="Limpar filtro"><span>${esc(label)}: ${esc([...values].join(", "))}</span><b>×</b></button>`;
   }).join("")}</div><button class="filter-clear-all tool-filter-clear-all" type="button"${activeFilters.length < 2 ? " hidden" : ""}><span aria-hidden="true">×</span> Limpar tudo</button></div>`;
 }
@@ -6450,7 +6463,7 @@ function renderToolProcesses(root) {
   </tr>`).join("") : `<tr><td colspan="${columns.length + 1}" class="tool-empty">Nenhum processo cadastrado.</td></tr>`;
   const feedback = remoteToolProcessesLoading ? '<div class="tool-empty">Carregando processos...</div>'
     : remoteToolProcessesError ? `<div class="tool-empty">Não foi possível carregar os processos: ${esc(remoteToolProcessesError)}</div>` : "";
-  root.innerHTML = `${toolsToolbarHtml(processes.length, "Adicionar processo", "tool-process-add", currentUserIsAdmin())}${processFilterStrip(tableState)}${feedback}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  root.innerHTML = `${toolsToolbarHtml(processes.length, "Adicionar processo", "tool-process-add", currentUserIsAdmin())}${toolFilterStrip("processes", tableState)}${feedback}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   wireToolsToolbar(root);
   wireSecondaryTableSelection(root.querySelector("table"), "tools:processes");
   document.getElementById("tool-process-add")?.addEventListener("click", () => openToolProcessForm());
@@ -6469,6 +6482,159 @@ function renderToolProcesses(root) {
     delete tableState.filters[filter.dataset.key]; renderToolsSection();
   }));
   root.querySelector(".tool-filter-clear-all")?.addEventListener("click", () => { tableState.filters = {}; renderToolsSection(); });
+}
+
+function toolDocumentRows() {
+  return isLive() ? remoteToolDocuments : (DEMO.documents || []);
+}
+
+function toolDocumentValue(documentItem, key) {
+  if (key === "tags") return normalizeTextList(documentItem.tags).join(", ");
+  if (key === "updated_at") return documentItem.updated_at
+    ? new Date(documentItem.updated_at).toLocaleString("pt-BR")
+    : "—";
+  return String(documentItem[key] || "—");
+}
+
+async function loadRemoteToolDocuments() {
+  if (!isLive() || remoteToolDocumentsLoading) return;
+  remoteToolDocumentsLoading = true;
+  remoteToolDocumentsError = "";
+  try {
+    remoteToolDocuments = await fetchTable("documents");
+    remoteToolDocumentsLoaded = true;
+  } catch (err) {
+    remoteToolDocumentsError = err.message;
+  } finally {
+    remoteToolDocumentsLoading = false;
+    const root = document.getElementById("tools-root");
+    if (root && toolsState.section === "documents") renderToolDocuments(root);
+  }
+}
+
+function renderToolDocuments(root) {
+  if (isLive() && !remoteToolDocumentsLoaded && !remoteToolDocumentsLoading && !remoteToolDocumentsError) loadRemoteToolDocuments();
+  const allDocuments = toolDocumentRows();
+  const query = toolsState.search.trim().toLocaleLowerCase("pt-BR");
+  const tableState = toolTableState("documents");
+  const documents = allDocuments.filter((documentItem) => {
+    const searchable = [documentItem.title, documentItem.category, documentItem.content, ...normalizeTextList(documentItem.tags)];
+    const matchesSearch = !query || searchable.some((value) => String(value || "").toLocaleLowerCase("pt-BR").includes(query));
+    return matchesSearch && Object.entries(tableState.filters).every(([key, selected]) =>
+      !selected?.size || selected.has(toolDocumentValue(documentItem, key))
+    );
+  });
+  if (tableState.sortKey) {
+    documents.sort((a, b) => toolDocumentValue(a, tableState.sortKey).localeCompare(
+      toolDocumentValue(b, tableState.sortKey), "pt-BR", { numeric: true, sensitivity: "base" }
+    ) * tableState.sortDir);
+  }
+  const columns = visibleToolColumns("documents");
+  const rows = documents.length ? documents.map((documentItem) => `<tr data-id="${esc(documentItem.id)}">
+    ${columns.map((col) => {
+      if (col.k === "title") return `<td><button class="process-open-link tool-document-open" data-id="${esc(documentItem.id)}">${esc(documentItem.title || "—")}</button></td>`;
+      if (col.k === "tags") return `<td><span class="tool-tags">${normalizeTextList(documentItem.tags).map((tag) => `<span class="tool-tag">${esc(tag)}</span>`).join("") || '<span class="muted">—</span>'}</span></td>`;
+      return `<td>${esc(toolDocumentValue(documentItem, col.k))}</td>`;
+    }).join("")}
+    <td><span class="tool-row-actions"><button class="tool-icon-btn tool-document-open" data-id="${esc(documentItem.id)}" title="Abrir documentação">◉</button>${currentUserIsAdmin() ? `<button class="tool-icon-btn tool-document-edit" data-id="${esc(documentItem.id)}" title="Editar documentação">✎</button><button class="tool-icon-btn tool-document-delete" data-id="${esc(documentItem.id)}" title="Excluir documentação">×</button>` : ""}</span></td>
+  </tr>`).join("") : `<tr><td colspan="${columns.length + 1}" class="tool-empty">Nenhuma documentação cadastrada.</td></tr>`;
+  const feedback = remoteToolDocumentsLoading ? '<div class="tool-empty">Carregando documentação...</div>'
+    : remoteToolDocumentsError ? `<div class="tool-empty">Não foi possível carregar a documentação: ${esc(remoteToolDocumentsError)}</div>` : "";
+  root.innerHTML = `${toolsToolbarHtml(documents.length, "Adicionar documentação", "tool-document-add", currentUserIsAdmin())}${toolFilterStrip("documents", tableState)}${feedback}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  wireToolsToolbar(root);
+  wireSecondaryTableSelection(root.querySelector("table"), "tools:documents");
+  document.getElementById("tool-document-add")?.addEventListener("click", () => openToolDocumentForm());
+  root.querySelectorAll(".tool-document-open").forEach((button) => button.addEventListener("click", () => openToolDocument(button.dataset.id)));
+  root.querySelectorAll(".tool-document-edit").forEach((button) => button.addEventListener("click", () => openToolDocumentForm(button.dataset.id)));
+  root.querySelectorAll(".tool-document-delete").forEach((button) => button.addEventListener("click", () => deleteToolDocument(button.dataset.id)));
+  root.querySelectorAll("th[data-tool-key]").forEach((header) => header.addEventListener("click", (event) => {
+    const key = header.dataset.toolKey;
+    if (event.ctrlKey || event.metaKey) { openToolColumnFilter(header, key, allDocuments, toolDocumentValue, "documents"); return; }
+    if (tableState.sortKey === key) tableState.sortDir *= -1;
+    else { tableState.sortKey = key; tableState.sortDir = 1; }
+    renderToolsSection();
+  }));
+  root.querySelectorAll(".tool-filter-badge").forEach((filter) => filter.addEventListener("click", () => {
+    delete tableState.filters[filter.dataset.key]; renderToolsSection();
+  }));
+  root.querySelector(".tool-filter-clear-all")?.addEventListener("click", () => { tableState.filters = {}; renderToolsSection(); });
+}
+
+function closeToolDocumentPanel(closePanel) {
+  closePanel?.();
+  if (document.getElementById("tools-root")) renderToolsSection();
+  else openToolsModal("documents");
+}
+
+function openToolDocument(id) {
+  const documentItem = toolDocumentRows().find((item) => item.id === id);
+  if (!documentItem) return;
+  const content = `<div class="document-detail">
+    <div class="process-detail-meta"><span>${esc(documentItem.category || "Sem categoria")}</span><span>${esc(toolDocumentValue(documentItem, "updated_at"))}</span></div>
+    ${normalizeTextList(documentItem.tags).length ? `<div class="tool-tags">${normalizeTextList(documentItem.tags).map((tag) => `<span class="tool-tag">${esc(tag)}</span>`).join("")}</div>` : ""}
+    <article class="document-content">${esc(documentItem.content || "Sem conteúdo.")}</article>
+  </div><div class="modal-foot"><button class="btn" id="tool-document-close">Fechar</button>${currentUserIsAdmin() ? '<button class="btn primary" id="tool-document-detail-edit">Editar</button>' : ""}</div>`;
+  const closePanel = document.getElementById("tools-root")
+    ? nestedSidePanel(documentItem.title, content, { closeOnOverlay: true })
+    : sidePanel(documentItem.title, content, { closeOnOverlay: true, onClose: () => openToolsModal("documents") });
+  document.getElementById("tool-document-close").addEventListener("click", () => closeToolDocumentPanel(closePanel));
+  document.getElementById("tool-document-detail-edit")?.addEventListener("click", () => { closePanel(); openToolDocumentForm(id); });
+}
+
+function openToolDocumentForm(id = null) {
+  if (!requireCurrentUserAdmin("Documentação")) return;
+  const current = toolDocumentRows().find((item) => item.id === id) || {};
+  const content = `<div class="form document-form">
+    <div class="field full"><label>Título *</label><input id="tool-document-title" value="${esc(current.title || "")}" placeholder="Ex.: Como emitir nota fiscal de entrada"></div>
+    <div class="field"><label>Categoria</label><input id="tool-document-category" value="${esc(current.category || "")}" placeholder="Ex.: Financeiro"></div>
+    <div class="field"><label>Tags</label><input id="tool-document-tags" value="${esc(normalizeTextList(current.tags).join(", "))}" placeholder="Nota fiscal, Bling, Entrada"></div>
+    <div class="field full"><label>Conteúdo *</label><textarea id="tool-document-content" rows="18" placeholder="Escreva a documentação da empresa aqui...">${esc(current.content || "")}</textarea></div>
+  </div><div class="modal-foot"><button class="btn" id="tool-document-cancel">Cancelar</button><button class="btn primary" id="tool-document-save">Salvar</button></div>`;
+  const closePanel = document.getElementById("tools-root")
+    ? nestedSidePanel(id ? "Editar documentação" : "Nova documentação", content, { closeOnOverlay: true })
+    : sidePanel(id ? "Editar documentação" : "Nova documentação", content, { closeOnOverlay: true, onClose: () => openToolsModal("documents") });
+  document.getElementById("tool-document-cancel").addEventListener("click", () => closeToolDocumentPanel(closePanel));
+  document.getElementById("tool-document-save").addEventListener("click", async () => {
+    const title = document.getElementById("tool-document-title").value.trim();
+    const contentValue = document.getElementById("tool-document-content").value.trim();
+    if (!title || !contentValue) { toast("Informe o título e o conteúdo.", true); return; }
+    const button = document.getElementById("tool-document-save");
+    button.disabled = true; button.textContent = "Salvando...";
+    const body = {
+      title,
+      category: document.getElementById("tool-document-category").value.trim() || null,
+      tags: normalizeTextList(document.getElementById("tool-document-tags").value),
+      content: contentValue,
+      updated_at: new Date().toISOString()
+    };
+    try {
+      const saved = id ? await updateRow("documents", id, body) : await createRow("documents", body);
+      if (isLive()) {
+        const index = remoteToolDocuments.findIndex((item) => item.id === saved.id);
+        if (index >= 0) remoteToolDocuments[index] = saved; else remoteToolDocuments.unshift(saved);
+        remoteToolDocumentsLoaded = true;
+      }
+      toast("Documentação salva.");
+      closeToolDocumentPanel(closePanel);
+    } catch (err) {
+      button.disabled = false; button.textContent = "Salvar";
+      toast("Erro ao salvar documentação · " + err.message, true);
+    }
+  });
+}
+
+async function deleteToolDocument(id) {
+  if (!requireCurrentUserAdmin("Documentação")) return;
+  const documentItem = toolDocumentRows().find((item) => item.id === id);
+  if (!documentItem || !window.confirm(`Excluir a documentação "${documentItem.title}"?`)) return;
+  try {
+    await deleteRow("documents", id);
+    if (isLive()) remoteToolDocuments = remoteToolDocuments.filter((item) => item.id !== id);
+    toast("Documentação excluída.");
+    renderToolsSection();
+  } catch (err) {
+    toast("Erro ao excluir documentação · " + err.message, true);
+  }
 }
 
 function closeToolProcessPanel(closePanel) {
@@ -6518,25 +6684,28 @@ function openToolProcessFlow(id) {
     if (!grouped.has(key)) grouped.set(key, { ...path, steps: [] });
     grouped.get(key).steps.push({ ...step, number: index + 1 });
   });
-  const lanes = [...grouped.values()].map((lane) => {
-    const sequence = lane.steps.map((step) => {
-      const reference = safeHttpUrl(step.url);
-      return `<article class="process-flow-node">
-        <div class="process-flow-node-head"><span class="process-flow-number">${step.number}</span><strong>${esc(step.system || "Sem sistema")}</strong></div>
-        ${step.type ? `<div class="process-flow-type">${esc(step.type)}</div>` : ""}
-        <p>${esc(step.details || "Sem detalhes.")}</p>
-        ${reference ? `<a href="${esc(reference)}" target="_blank" rel="noopener">Abrir URL ↗</a>` : ""}
-      </article>`;
+  const lanes = [...grouped.values()];
+  const laneIndexes = new Map(lanes.map((lane, index) => [JSON.stringify({
+    module: lane.module, submodule: lane.submodule, group: lane.group
+  }), index]));
+  const matrixColumns = `190px 96px repeat(${Math.max(steps.length, 1)}, 240px) 96px`;
+  const headers = steps.map((step, index) => `<div class="process-flow-column-head" style="grid-column:${index + 3};grid-row:1">Etapa ${index + 1}</div>`).join("");
+  const labels = lanes.map((lane, index) => `<header class="process-flow-lane-label" style="grid-column:1;grid-row:${index + 2}">
+    <span>Módulo</span><strong>${esc(lane.module)}</strong><span>Submódulo</span><b>${esc(lane.submodule)}</b><span>Grupo</span><b>${esc(lane.group)}</b>
+  </header>`).join("");
+  const nodes = steps.map((step, index) => {
+    const reference = safeHttpUrl(step.url);
+    const key = JSON.stringify({
+      module: step.module || "Sem módulo",
+      submodule: step.submodule || "Sem submódulo",
+      group: step.group || "Sem grupo"
     });
-    return `<section class="process-flow-lane">
-      <header class="process-flow-lane-label"><span>Módulo</span><strong>${esc(lane.module)}</strong><span>Submódulo</span><b>${esc(lane.submodule)}</b><span>Grupo</span><b>${esc(lane.group)}</b></header>
-      <div class="process-flow-lane-scroll"><div class="process-flow-track">
-        <div class="process-flow-terminal start"><span>Início</span></div>
-        ${sequence.map((node) => `<div class="process-flow-connector" aria-hidden="true"><span>→</span></div>${node}`).join("")}
-        <div class="process-flow-connector" aria-hidden="true"><span>→</span></div>
-        <div class="process-flow-terminal end"><span>Fim</span></div>
-      </div></div>
-    </section>`;
+    return `<article class="process-flow-node process-flow-point" data-sequence="${index + 1}" style="grid-column:${index + 3};grid-row:${laneIndexes.get(key) + 2}">
+      <div class="process-flow-node-head"><span class="process-flow-number">${index + 1}</span><strong>${esc(step.system || "Sem sistema")}</strong></div>
+      ${step.type ? `<div class="process-flow-type">${esc(step.type)}</div>` : ""}
+      <p>${esc(step.details || "Sem detalhes.")}</p>
+      ${reference ? `<a href="${esc(reference)}" target="_blank" rel="noopener">Abrir URL ↗</a>` : ""}
+    </article>`;
   }).join("");
   const systems = [...new Set(steps.map((step) => step.system).filter(Boolean))];
   const content = `<div class="process-flow-view">
@@ -6547,11 +6716,60 @@ function openToolProcessFlow(id) {
       <div><span>Linhas</span><strong>${grouped.size}</strong></div>
     </div>
     <div class="process-flow-scroll">
-      <div class="process-flow-lanes">${lanes || '<div class="tool-empty">Nenhuma etapa cadastrada.</div>'}</div>
+      ${steps.length ? `<div class="process-flow-matrix" style="grid-template-columns:${matrixColumns};grid-template-rows:34px repeat(${Math.max(lanes.length, 1)},minmax(170px,auto))">
+        <div class="process-flow-corner" style="grid-column:1;grid-row:1">Módulo / Submódulo / Grupo</div>
+        <div class="process-flow-column-head" style="grid-column:2;grid-row:1">Início</div>
+        ${headers}
+        <div class="process-flow-column-head" style="grid-column:${steps.length + 3};grid-row:1">Fim</div>
+        ${labels}
+        <div class="process-flow-terminal start process-flow-point" data-sequence="0" style="grid-column:2;grid-row:2 / span ${Math.max(lanes.length, 1)}"><span>Início</span></div>
+        ${nodes}
+        <div class="process-flow-terminal end process-flow-point" data-sequence="${steps.length + 1}" style="grid-column:${steps.length + 3};grid-row:2 / span ${Math.max(lanes.length, 1)}"><span>Fim</span></div>
+      </div>` : '<div class="tool-empty">Nenhuma etapa cadastrada.</div>'}
     </div>
   </div><div class="modal-foot"><button class="btn" id="tool-process-flow-close">Fechar</button></div>`;
-  const closeFlow = nestedCenterModal(`Fluxo · ${process.title}`, content, { cls: "full process-flow-modal", closeOnOverlay: true });
+  let resizeObserver;
+  const closeFlow = nestedCenterModal(`Fluxo · ${process.title}`, content, {
+    cls: "full process-flow-modal",
+    closeOnOverlay: true,
+    onClose: () => resizeObserver?.disconnect()
+  });
   document.getElementById("tool-process-flow-close").addEventListener("click", closeFlow);
+  const matrix = document.querySelector(".process-flow-matrix");
+  if (matrix) {
+    requestAnimationFrame(() => drawProcessFlowConnections(matrix));
+    resizeObserver = new ResizeObserver(() => drawProcessFlowConnections(matrix));
+    resizeObserver.observe(matrix);
+  }
+}
+
+function drawProcessFlowConnections(matrix) {
+  matrix.querySelector(".process-flow-svg")?.remove();
+  const points = [...matrix.querySelectorAll(".process-flow-point")]
+    .sort((a, b) => Number(a.dataset.sequence) - Number(b.dataset.sequence));
+  if (points.length < 2) return;
+  const bounds = matrix.getBoundingClientRect();
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.classList.add("process-flow-svg");
+  svg.setAttribute("width", String(matrix.scrollWidth));
+  svg.setAttribute("height", String(matrix.scrollHeight));
+  svg.setAttribute("viewBox", `0 0 ${matrix.scrollWidth} ${matrix.scrollHeight}`);
+  svg.innerHTML = '<defs><marker id="process-flow-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z"></path></marker></defs>';
+  points.slice(0, -1).forEach((point, index) => {
+    const next = points[index + 1];
+    const from = point.getBoundingClientRect();
+    const to = next.getBoundingClientRect();
+    const x1 = from.right - bounds.left;
+    const y1 = from.top + from.height / 2 - bounds.top;
+    const x2 = to.left - bounds.left;
+    const y2 = to.top + to.height / 2 - bounds.top;
+    const middle = x1 + Math.max(24, (x2 - x1) / 2);
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", `M ${x1} ${y1} H ${middle} V ${y2} H ${x2}`);
+    path.setAttribute("marker-end", "url(#process-flow-arrow)");
+    svg.appendChild(path);
+  });
+  matrix.prepend(svg);
 }
 
 function processStepEditorHtml(steps) {

@@ -226,7 +226,8 @@ const REMOTE_TABLE = {
   deliveryObjectives: "delivery_objectives",
   deliveryGoals: "delivery_goals",
   processes: "training_processes",
-  documents: "company_documents"
+  documents: "company_documents",
+  contactCompanies: "contact_companies"
 };
 const remoteTable = (tab) => REMOTE_TABLE[tab] || tab;
 const FIELD_REMAP = {
@@ -300,7 +301,8 @@ const DEMO = {
   deliveryObjectives: [],
   deliveryGoals: [],
   processes: [],
-  documents: []
+  documents: [],
+  contactCompanies: []
 };
 
 // ---------- REST Supabase ----------
@@ -1058,7 +1060,7 @@ async function loadAll() {
   // tiver nome diferente no banco, o módulo dela fica vazio em vez de
   // derrubar o carregamento inteiro (ex.: "companies" continua funcionando
   // mesmo que "deals"/"users" ainda não tenham sido migradas).
-  const [users, companies, contacts, products, deals, projects, pipelines, activityRecords, productActivities, productObjectives, productGoals, deliveryObjectives, deliveryGoals] = await Promise.all([
+  const [users, companies, contacts, products, deals, projects, pipelines, activityRecords, productActivities, productObjectives, productGoals, deliveryObjectives, deliveryGoals, contactCompanies] = await Promise.all([
     fetchTable("users").catch(() => []),
     fetchTable("companies"),
     fetchTable("contacts").catch(() => []),
@@ -1071,13 +1073,29 @@ async function loadAll() {
     fetchTable("productObjectives").catch(() => []),
     fetchTable("productGoals").catch(() => []),
     fetchTable("deliveryObjectives").catch(() => []),
-    fetchTable("deliveryGoals").catch(() => [])
+    fetchTable("deliveryGoals").catch(() => []),
+    fetchTable("contactCompanies").catch(() => null)
   ]);
   const byId = (arr, key = "id") => Object.fromEntries(arr.map((r) => [r[key], r]));
+  const companyIdsByContact = new Map();
+  const contactIdsByCompany = new Map();
+  (contactCompanies || []).forEach((link) => {
+    if (!companyIdsByContact.has(link.contact_id)) companyIdsByContact.set(link.contact_id, []);
+    if (!contactIdsByCompany.has(link.company_id)) contactIdsByCompany.set(link.company_id, []);
+    companyIdsByContact.get(link.contact_id).push(link.company_id);
+    contactIdsByCompany.get(link.company_id).push(link.contact_id);
+  });
+  contacts.forEach((contact) => {
+    const linked = companyIdsByContact.get(contact.id) || [];
+    contact.company_ids = [...new Set((contactCompanies ? linked : [...linked, contact.company_id]).filter(Boolean))];
+  });
+  companies.forEach((company) => {
+    company.contact_ids = [...new Set(contactIdsByCompany.get(company.tax_id) || [])];
+  });
   const conversations = loadConversations();
   const projectById = byId(projects);
   cache = { users, companies, contacts, products, deals, projects, pipelines, conversations,
-    activities: [], activityRecords, productActivities, productObjectives, productGoals, deliveryObjectives, deliveryGoals,
+    activities: [], activityRecords, productActivities, productObjectives, productGoals, deliveryObjectives, deliveryGoals, contactCompanies: contactCompanies || [],
     companyById: byId(companies, pk("companies")), contactById: byId(contacts), productById: byId(products),
     userById: byId(users), pipelineById: byId(pipelines), projectById };
   await migrateLocalOperationalData();
@@ -1227,6 +1245,7 @@ function columns(tab, c) {
       { k: "zip_code", h: "CEP", cls: "muted" },
       { k: "city", h: "CIDADE" },
       { k: "state", h: "UF", cls: "muted" },
+      { k: "contact_ids", h: "PESSOAS", fmt: (v) => contactNames(v, c) },
       { k: "notes", h: "OBSERVAÇÕES", cls: "muted" }];
     case "contacts": return [
       { k: "name", h: "NOME COMPLETO" },
@@ -1235,7 +1254,7 @@ function columns(tab, c) {
       { k: "contact_type", h: "TIPO DE CONTATO" },
       { k: "channel", h: "CANAL" },
       { k: "job_title", h: "CARGO" },
-      { k: "company_id", h: "EMPRESA(S)", fmt: (v) => c.companyById[v]?.legal_name || c.companyById[v]?.name || "—" },
+      { k: "company_ids", h: "EMPRESA(S)", fmt: (v, row) => companyNames(v?.length ? v : [row.company_id], c) },
       { k: "linkedin", h: "LINKEDIN", cls: "muted" },
       { k: "facebook", h: "FACEBOOK", cls: "muted" },
       { k: "instagram", h: "INSTAGRAM", cls: "muted" },
@@ -1316,6 +1335,14 @@ function columns(tab, c) {
 function refOptions(ref, c) {
   return (c[ref] || []).map((r) => ({ value: r[pk(ref)], label: r.name || r.legal_name || r.full_name || r.title || r[pk(ref)] }));
 }
+
+function companyNames(ids, c = cache) {
+  return normalizeIdList(ids).map((id) => c?.companyById?.[id]?.trade_name || c?.companyById?.[id]?.legal_name || id).join(", ") || "—";
+}
+
+function contactNames(ids, c = cache) {
+  return normalizeIdList(ids).map((id) => c?.contactById?.[id]?.name || id).join(", ") || "—";
+}
 // Etapas do pipeline selecionado (ou o primeiro cadastrado, na falta de um).
 // Como agora são texto livre por pipeline, valor e rótulo da opção são o
 // próprio texto da etapa.
@@ -1339,6 +1366,7 @@ function fields(tab, c) {
       { k: "zip_code", label: "CEP" },
       { k: "city", label: "Cidade" },
       { k: "state", label: "UF" },
+      { k: "contact_ids", label: "Pessoas vinculadas", type: "multi", options: refOptions("contacts", c), full: true, placeholder: "Selecionar pessoas" },
       { k: "notes", label: "Observações", full: true }];
     case "contacts": return [
       { k: "name", label: "Nome completo", req: true, full: true },
@@ -1347,7 +1375,7 @@ function fields(tab, c) {
       { k: "contact_type", label: "Tipo de contato" },
       { k: "channel", label: "Canal" },
       { k: "job_title", label: "Cargo" },
-      { k: "company_id", label: "Empresa(s)", searchableRef: "companies", options: refOptions("companies", c), full: true },
+      { k: "company_ids", label: "Empresa(s)", type: "multi", options: refOptions("companies", c), full: true, placeholder: "Selecionar empresas" },
       { k: "linkedin", label: "LinkedIn" },
       { k: "facebook", label: "Facebook" },
       { k: "instagram", label: "Instagram" },
@@ -4496,7 +4524,7 @@ async function convertImportToDeal(id) {
     await createRow("deals", {
       title: row.title || `WhatsApp - ${row.contact_name}`,
       contact_id: contact.id,
-      company_id: contact.company_id || null,
+      company_id: normalizeIdList(contact.company_ids, contact.company_id)[0] || null,
       product_id: null,
       owner_id: null,
       pipeline_id: firstPipeline?.id || null,
@@ -4705,7 +4733,9 @@ function openForm(tab, id, opts = {}) {
     if (tab === "projects" && f.k === "name") val = deliveryGeneratedName(record?.client_name, record?.product_id);
     const isLocked = Boolean(f.generated);
     let ctrl;
-    if (f.searchableRef) {
+    if (f.type === "multi") {
+      ctrl = multiPickerHtml(`form-${f.k}`, f.options || [], new Set(normalizeIdList(val)), f.placeholder || "Selecionar");
+    } else if (f.searchableRef) {
       const selected = f.options.find((option) => option.value === val);
       const listId = `search-${f.k}-options`;
       ctrl = `<input data-search-ref="${f.searchableRef}" data-search-target="${f.k}" list="${listId}" value="${esc(selected?.label || val || "")}" placeholder="Buscar empresa...">
@@ -4754,6 +4784,7 @@ function openForm(tab, id, opts = {}) {
 
   document.getElementById("cancel").addEventListener("click", returnToPrevious);
   document.getElementById("save").addEventListener("click", () => saveForm(tab, id, fs, opts));
+  fs.filter((field) => field.type === "multi").forEach((field) => wireMultiPicker(`form-${field.k}`));
   document.querySelectorAll("#modal-root [data-search-ref]").forEach((input) => {
     const field = fs.find((item) => item.k === input.dataset.searchTarget);
     const hidden = document.querySelector(`#modal-root [data-k="${input.dataset.searchTarget}"]`);
@@ -4855,10 +4886,44 @@ async function lookupCompanyByCnpj(form, button) {
   }
 }
 
+async function replaceContactCompanyLinks({ contactId = null, companyId = null, relatedIds = [] }) {
+  const ids = [...new Set(normalizeIdList(relatedIds))];
+  if (!contactId && !companyId) return;
+  if (!isLive()) {
+    DEMO.contactCompanies = (DEMO.contactCompanies || []).filter((link) =>
+      contactId ? link.contact_id !== contactId : link.company_id !== companyId
+    );
+    const links = ids.map((relatedId) => contactId
+      ? { contact_id: contactId, company_id: relatedId }
+      : { contact_id: relatedId, company_id: companyId }
+    );
+    DEMO.contactCompanies.push(...links);
+    return;
+  }
+  const filter = contactId
+    ? `contact_id=eq.${encodeURIComponent(contactId)}`
+    : `company_id=eq.${encodeURIComponent(companyId)}`;
+  await api(`${remoteTable("contactCompanies")}?${filter}`, { method: "DELETE" });
+  if (!ids.length) return;
+  const links = ids.map((relatedId) => contactId
+    ? { contact_id: contactId, company_id: relatedId }
+    : { contact_id: relatedId, company_id: companyId }
+  );
+  await api(remoteTable("contactCompanies"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Prefer: "return=minimal" },
+    body: JSON.stringify(links)
+  });
+}
+
 async function saveForm(tab, id, fs, opts = {}) {
   const body = {};
   const form = document.querySelector("#modal-root .form");
   for (const f of fs) {
+    if (f.type === "multi") {
+      body[f.k] = multiPickerValues(`form-${f.k}`);
+      continue;
+    }
     const el = form?.querySelector(`[data-k="${f.k}"]`);
     if (!el) continue;
     let v;
@@ -4867,6 +4932,13 @@ async function saveForm(tab, id, fs, opts = {}) {
     else v = el.value === "" ? null : el.value;
     body[f.k] = v;
   }
+  const linkedCompanyIds = tab === "contacts" ? normalizeIdList(body.company_ids) : null;
+  const linkedContactIds = tab === "companies" ? normalizeIdList(body.contact_ids) : null;
+  if (tab === "contacts") {
+    delete body.company_ids;
+    body.company_id = linkedCompanyIds[0] || null;
+  }
+  if (tab === "companies") delete body.contact_ids;
   if (tab === "projects") body.name = deliveryGeneratedName(body.client_name, body.product_id);
   const req = fs.find((f) => f.req && (body[f.k] == null || body[f.k] === ""));
   if (req) { toast(`Preencha: ${req.label}`, true); return; }
@@ -4878,6 +4950,8 @@ async function saveForm(tab, id, fs, opts = {}) {
     let saved;
     if (id) { saved = await updateRow(tab, id, body); toast("Atualizado."); }
     else { saved = await createRow(tab, body); toast("Criado."); }
+    if (tab === "contacts") await replaceContactCompanyLinks({ contactId: saved.id, relatedIds: linkedCompanyIds });
+    if (tab === "companies") await replaceContactCompanyLinks({ companyId: saved.tax_id, relatedIds: linkedContactIds });
     if (tab === "deals" && body.status === "won") {
       const dealId = id || saved?.id;
       if (dealId) await createProjectFromDeal({ id: dealId, company_id: body.company_id, contact_id: body.contact_id, product_id: body.product_id, title: body.title });
@@ -4986,8 +5060,8 @@ function helpContentHtml() {
 
     <section class="help-section" id="help-modules"><h4>Módulos principais</h4><ul>
       <li><b>Home:</b> totais de pessoas, empresas, negócios, produtos e entregas, além de tarefas pendentes, atrasadas e próximas.</li>
-      <li><b>Pessoas:</b> contatos, telefones, e-mails, empresa, cargo, canal, CPF, nascimento, redes sociais e grupos.</li>
-      <li><b>Empresas:</b> CNPJ, razão social, nome fantasia, contatos, endereço, situação cadastral, atividades e observações. A consulta pelo CNPJ preenche dados públicos disponíveis.</li>
+      <li><b>Pessoas:</b> contatos, telefones, e-mails, múltiplas empresas vinculadas, cargo, canal, CPF, nascimento, redes sociais e grupos.</li>
+      <li><b>Empresas:</b> CNPJ, razão social, nome fantasia, múltiplas pessoas vinculadas, endereço, situação cadastral, atividades e observações. A consulta pelo CNPJ preenche dados públicos disponíveis.</li>
       <li><b>Conversas:</b> histórico importado ou capturado, associação a pessoas e conversão individual ou em lote para negócio.</li>
       <li><b>Negócios:</b> empresa, contato, produto, responsável, pipeline, etapa, origem, valor, previsão e situação aberto, ganho ou perdido.</li>
       <li><b>Entregas:</b> projetos e serviços pós-venda com cliente, produto, período, status, tarefas, objetivos e metas.</li>
@@ -5036,7 +5110,7 @@ function helpContentHtml() {
       <li><b>Arquivos:</b> catálogo de atalhos para pastas, como links do Google Drive, com nome e descrição. O CRM guarda o link, não copia os arquivos.</li>
       <li><b>E-mails:</b> ao criar uma entrega, o CRM cria automaticamente na HostGator uma conta formada pela raiz do CNPJ em <b>@ecommerce365.com.br</b>. A senha pode ser revelada ou copiada nesta tela.</li>
       <li><b>Processos:</b> biblioteca de treinamento organizada por nome, categoria e tags. Cada etapa registra sistema, módulo, submódulo, grupo, tipo, URL e detalhes. O botão de fluxo agrupa as etapas visualmente por módulo, submódulo e grupo.</li>
-      <li><b>Documentação:</b> base interna da empresa com título, categoria, tags e conteúdo. Use para registrar políticas, orientações e materiais de apoio aos treinamentos.</li>
+      <li><b>Documentação:</b> apresentações textuais em slides, com título, páginas, negrito, itálico, cores e alinhamento. Use para políticas, orientações e materiais de treinamento.</li>
       <li>Busca, classificação, filtros e seleção de colunas funcionam nas tabelas de E-mails, Processos e Documentação.</li>
     </ul><p class="help-note"><b>Segurança:</b> as credenciais de e-mail são compartilhadas entre os usuários ativos do CRM e a senha permanece criptografada no Supabase. Processos e documentos podem ser consultados por usuários ativos e alterados apenas por administradores. Os links de Arquivos continuam salvos somente neste navegador.</p></section>
 
@@ -6128,9 +6202,14 @@ async function importSelectedGoogleContacts() {
         });
         const saved = await updateRow("contacts", existing.id, patch);
         Object.assign(existing, saved || patch);
+        if (company) await replaceContactCompanyLinks({
+          contactId: existing.id,
+          relatedIds: [...normalizeIdList(existing.company_ids), company.tax_id]
+        });
         updated++;
       } else {
         const saved = await createRow("contacts", contactBody);
+        if (company) await replaceContactCompanyLinks({ contactId: saved.id, relatedIds: [company.tax_id] });
         cache.contacts.push(saved);
         created++;
       }
@@ -6488,6 +6567,50 @@ function toolDocumentRows() {
   return isLive() ? remoteToolDocuments : (DEMO.documents || []);
 }
 
+function sanitizeDocumentHtml(value) {
+  const template = document.createElement("template");
+  template.innerHTML = String(value || "");
+  const allowedTags = new Set(["DIV", "P", "BR", "STRONG", "B", "EM", "I", "SPAN", "FONT"]);
+  const blockedTags = new Set(["SCRIPT", "STYLE", "IFRAME", "OBJECT", "EMBED", "LINK", "META"]);
+  [...template.content.querySelectorAll("*")].forEach((element) => {
+    if (blockedTags.has(element.tagName)) { element.remove(); return; }
+    if (!allowedTags.has(element.tagName)) {
+      element.replaceWith(...element.childNodes);
+      return;
+    }
+    const color = element.style.color || element.getAttribute("color") || "";
+    const textAlign = element.style.textAlign || element.getAttribute("align") || "";
+    [...element.attributes].forEach((attribute) => element.removeAttribute(attribute.name));
+    if (color && CSS.supports("color", color)) element.style.color = color;
+    if (["left", "center", "right", "justify"].includes(textAlign)) element.style.textAlign = textAlign;
+  });
+  return template.innerHTML;
+}
+
+function normalizeDocumentSlides(value, fallbackContent = "", fallbackTitle = "") {
+  let slides = value;
+  if (typeof slides === "string") {
+    try { slides = JSON.parse(slides); } catch (e) { slides = []; }
+  }
+  if (!Array.isArray(slides) || !slides.length) {
+    slides = [{ id: crypto.randomUUID(), title: fallbackTitle || "Slide 1", html: esc(fallbackContent || "").replace(/\r?\n/g, "<br>"), background: "#ffffff" }];
+  }
+  return slides.map((slide, index) => ({
+    id: String(slide?.id || crypto.randomUUID()),
+    title: String(slide?.title || `Slide ${index + 1}`).trim(),
+    html: sanitizeDocumentHtml(slide?.html || ""),
+    background: CSS.supports("color", String(slide?.background || "")) ? String(slide.background) : "#ffffff"
+  }));
+}
+
+function documentSlideText(slides) {
+  const template = document.createElement("template");
+  return normalizeDocumentSlides(slides).map((slide) => {
+    template.innerHTML = slide.html;
+    return [slide.title, template.content.textContent || ""].join(" ");
+  }).join("\n");
+}
+
 function toolDocumentValue(documentItem, key) {
   if (key === "tags") return normalizeTextList(documentItem.tags).join(", ");
   if (key === "updated_at") return documentItem.updated_at
@@ -6518,7 +6641,7 @@ function renderToolDocuments(root) {
   const query = toolsState.search.trim().toLocaleLowerCase("pt-BR");
   const tableState = toolTableState("documents");
   const documents = allDocuments.filter((documentItem) => {
-    const searchable = [documentItem.title, documentItem.category, documentItem.content, ...normalizeTextList(documentItem.tags)];
+    const searchable = [documentItem.title, documentItem.category, documentItem.content, documentSlideText(documentItem.slides), ...normalizeTextList(documentItem.tags)];
     const matchesSearch = !query || searchable.some((value) => String(value || "").toLocaleLowerCase("pt-BR").includes(query));
     return matchesSearch && Object.entries(tableState.filters).every(([key, selected]) =>
       !selected?.size || selected.has(toolDocumentValue(documentItem, key))
@@ -6569,35 +6692,108 @@ function closeToolDocumentPanel(closePanel) {
 function openToolDocument(id) {
   const documentItem = toolDocumentRows().find((item) => item.id === id);
   if (!documentItem) return;
-  const content = `<div class="document-detail">
-    <div class="process-detail-meta"><span>${esc(documentItem.category || "Sem categoria")}</span><span>${esc(toolDocumentValue(documentItem, "updated_at"))}</span></div>
-    ${normalizeTextList(documentItem.tags).length ? `<div class="tool-tags">${normalizeTextList(documentItem.tags).map((tag) => `<span class="tool-tag">${esc(tag)}</span>`).join("")}</div>` : ""}
-    <article class="document-content">${esc(documentItem.content || "Sem conteúdo.")}</article>
+  const slides = normalizeDocumentSlides(documentItem.slides, documentItem.content, documentItem.title);
+  const content = `<div class="document-presentation">
+    <aside class="document-slide-list" id="document-viewer-list"></aside>
+    <main class="document-stage-wrap"><div class="document-meta"><div class="process-detail-meta"><span>${esc(documentItem.category || "Sem categoria")}</span><span>${slides.length} slide(s)</span><span>${esc(toolDocumentValue(documentItem, "updated_at"))}</span></div>${normalizeTextList(documentItem.tags).length ? `<div class="tool-tags">${normalizeTextList(documentItem.tags).map((tag) => `<span class="tool-tag">${esc(tag)}</span>`).join("")}</div>` : ""}</div><article class="document-slide" id="document-viewer-slide"></article></main>
   </div><div class="modal-foot"><button class="btn" id="tool-document-close">Fechar</button>${currentUserIsAdmin() ? '<button class="btn primary" id="tool-document-detail-edit">Editar</button>' : ""}</div>`;
-  const closePanel = document.getElementById("tools-root")
-    ? nestedSidePanel(documentItem.title, content, { closeOnOverlay: true })
-    : sidePanel(documentItem.title, content, { closeOnOverlay: true, onClose: () => openToolsModal("documents") });
-  document.getElementById("tool-document-close").addEventListener("click", () => closeToolDocumentPanel(closePanel));
+  const closePanel = nestedCenterModal(documentItem.title, content, { cls: "full document-viewer-modal", closeOnOverlay: true });
+  let activeIndex = 0;
+  const draw = () => {
+    const slide = slides[activeIndex];
+    document.getElementById("document-viewer-list").innerHTML = slides.map((item, index) => `<button class="document-slide-thumb${index === activeIndex ? " active" : ""}" data-index="${index}"><span>${index + 1}</span><b>${esc(item.title)}</b></button>`).join("");
+    const stage = document.getElementById("document-viewer-slide");
+    stage.style.background = slide.background;
+    stage.innerHTML = `<h2>${esc(slide.title)}</h2><div class="document-slide-body">${sanitizeDocumentHtml(slide.html)}</div>`;
+    document.querySelectorAll("#document-viewer-list .document-slide-thumb").forEach((button) => button.addEventListener("click", () => { activeIndex = Number(button.dataset.index); draw(); }));
+  };
+  draw();
+  document.getElementById("tool-document-close").addEventListener("click", closePanel);
   document.getElementById("tool-document-detail-edit")?.addEventListener("click", () => { closePanel(); openToolDocumentForm(id); });
 }
 
 function openToolDocumentForm(id = null) {
   if (!requireCurrentUserAdmin("Documentação")) return;
   const current = toolDocumentRows().find((item) => item.id === id) || {};
-  const content = `<div class="form document-form">
-    <div class="field full"><label>Título *</label><input id="tool-document-title" value="${esc(current.title || "")}" placeholder="Ex.: Como emitir nota fiscal de entrada"></div>
-    <div class="field"><label>Categoria</label><input id="tool-document-category" value="${esc(current.category || "")}" placeholder="Ex.: Financeiro"></div>
-    <div class="field"><label>Tags</label><input id="tool-document-tags" value="${esc(normalizeTextList(current.tags).join(", "))}" placeholder="Nota fiscal, Bling, Entrada"></div>
-    <div class="field full"><label>Conteúdo *</label><textarea id="tool-document-content" rows="18" placeholder="Escreva a documentação da empresa aqui...">${esc(current.content || "")}</textarea></div>
-  </div><div class="modal-foot"><button class="btn" id="tool-document-cancel">Cancelar</button><button class="btn primary" id="tool-document-save">Salvar</button></div>`;
-  const closePanel = document.getElementById("tools-root")
-    ? nestedSidePanel(id ? "Editar documentação" : "Nova documentação", content, { closeOnOverlay: true })
-    : sidePanel(id ? "Editar documentação" : "Nova documentação", content, { closeOnOverlay: true, onClose: () => openToolsModal("documents") });
-  document.getElementById("tool-document-cancel").addEventListener("click", () => closeToolDocumentPanel(closePanel));
+  let slides = normalizeDocumentSlides(current.slides, current.content, current.title);
+  let activeIndex = 0;
+  const content = `<div class="document-editor">
+    <div class="document-editor-info">
+      <input id="tool-document-title" value="${esc(current.title || "")}" placeholder="Nome da documentação">
+      <input id="tool-document-category" value="${esc(current.category || "")}" placeholder="Categoria">
+      <input id="tool-document-tags" value="${esc(normalizeTextList(current.tags).join(", "))}" placeholder="Tags separadas por vírgula">
+    </div>
+    <div class="document-editor-toolbar" role="toolbar" aria-label="Formatação de texto">
+      <button class="tool-icon-btn document-format" data-command="bold" title="Negrito"><b>B</b></button>
+      <button class="tool-icon-btn document-format" data-command="italic" title="Itálico"><i>I</i></button>
+      <label title="Cor do texto"><span>Texto</span><input id="document-text-color" type="color" value="#111827"></label>
+      <label title="Cor do slide"><span>Fundo</span><input id="document-background-color" type="color" value="#ffffff"></label>
+      <button class="tool-icon-btn document-format" data-command="justifyLeft" title="Alinhar à esquerda">≡</button>
+      <button class="tool-icon-btn document-format" data-command="justifyCenter" title="Centralizar">≡</button>
+      <button class="tool-icon-btn document-format" data-command="justifyRight" title="Alinhar à direita">≡</button>
+      <button class="tool-icon-btn document-format" data-command="justifyFull" title="Justificar">☰</button>
+    </div>
+    <div class="document-editor-workspace">
+      <aside class="document-slide-list"><div id="document-editor-list"></div><button class="btn document-add-slide" id="document-add-slide">+ Slide</button></aside>
+      <main class="document-stage-wrap"><div class="document-slide document-slide-edit" id="document-editor-slide"><input id="document-slide-title" placeholder="Título do slide"><div id="document-slide-body" class="document-slide-body" contenteditable="true" data-placeholder="Digite o conteúdo do slide..."></div></div></main>
+    </div>
+  </div><div class="modal-foot"><button class="btn danger" id="document-delete-slide">Excluir slide</button><button class="btn" id="tool-document-cancel">Cancelar</button><button class="btn primary" id="tool-document-save">Salvar</button></div>`;
+  const closePanel = nestedCenterModal(id ? "Editar documentação" : "Nova documentação", content, { cls: "full document-editor-modal", closeOnOverlay: true });
+  const persistActiveSlide = () => {
+    const slide = slides[activeIndex];
+    if (!slide) return;
+    slide.title = document.getElementById("document-slide-title").value.trim() || `Slide ${activeIndex + 1}`;
+    slide.html = sanitizeDocumentHtml(document.getElementById("document-slide-body").innerHTML);
+    slide.background = document.getElementById("document-background-color").value;
+  };
+  const drawEditor = () => {
+    const slide = slides[activeIndex];
+    document.getElementById("document-editor-list").innerHTML = slides.map((item, index) => `<button class="document-slide-thumb${index === activeIndex ? " active" : ""}" data-index="${index}"><span>${index + 1}</span><b>${esc(item.title || `Slide ${index + 1}`)}</b></button>`).join("");
+    document.getElementById("document-slide-title").value = slide.title;
+    document.getElementById("document-slide-body").innerHTML = sanitizeDocumentHtml(slide.html);
+    document.getElementById("document-editor-slide").style.background = slide.background;
+    document.getElementById("document-background-color").value = /^#[0-9a-f]{6}$/i.test(slide.background) ? slide.background : "#ffffff";
+    document.getElementById("document-delete-slide").disabled = slides.length === 1;
+    document.querySelectorAll("#document-editor-list .document-slide-thumb").forEach((button) => button.addEventListener("click", () => {
+      persistActiveSlide(); activeIndex = Number(button.dataset.index); drawEditor();
+    }));
+  };
+  drawEditor();
+  document.getElementById("document-slide-title").addEventListener("input", (event) => {
+    slides[activeIndex].title = event.target.value;
+    document.querySelector(`#document-editor-list .document-slide-thumb[data-index="${activeIndex}"] b`).textContent = event.target.value || `Slide ${activeIndex + 1}`;
+  });
+  document.getElementById("document-background-color").addEventListener("input", (event) => {
+    slides[activeIndex].background = event.target.value;
+    document.getElementById("document-editor-slide").style.background = event.target.value;
+  });
+  document.getElementById("document-text-color").addEventListener("input", (event) => {
+    document.getElementById("document-slide-body").focus();
+    document.execCommand("foreColor", false, event.target.value);
+  });
+  document.querySelectorAll(".document-format").forEach((button) => button.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+    document.getElementById("document-slide-body").focus();
+    document.execCommand(button.dataset.command, false);
+  }));
+  document.getElementById("document-add-slide").addEventListener("click", () => {
+    persistActiveSlide();
+    slides.push({ id: crypto.randomUUID(), title: `Slide ${slides.length + 1}`, html: "", background: "#ffffff" });
+    activeIndex = slides.length - 1;
+    drawEditor();
+  });
+  document.getElementById("document-delete-slide").addEventListener("click", () => {
+    if (slides.length === 1 || !window.confirm("Excluir este slide?")) return;
+    slides.splice(activeIndex, 1);
+    activeIndex = Math.max(0, activeIndex - 1);
+    drawEditor();
+  });
+  document.getElementById("tool-document-cancel").addEventListener("click", closePanel);
   document.getElementById("tool-document-save").addEventListener("click", async () => {
+    persistActiveSlide();
     const title = document.getElementById("tool-document-title").value.trim();
-    const contentValue = document.getElementById("tool-document-content").value.trim();
-    if (!title || !contentValue) { toast("Informe o título e o conteúdo.", true); return; }
+    const contentValue = documentSlideText(slides).trim();
+    if (!title || !contentValue) { toast("Informe o nome e o conteúdo da documentação.", true); return; }
     const button = document.getElementById("tool-document-save");
     button.disabled = true; button.textContent = "Salvando...";
     const body = {
@@ -6605,6 +6801,7 @@ function openToolDocumentForm(id = null) {
       category: document.getElementById("tool-document-category").value.trim() || null,
       tags: normalizeTextList(document.getElementById("tool-document-tags").value),
       content: contentValue,
+      slides,
       updated_at: new Date().toISOString()
     };
     try {
@@ -6615,7 +6812,8 @@ function openToolDocumentForm(id = null) {
         remoteToolDocumentsLoaded = true;
       }
       toast("Documentação salva.");
-      closeToolDocumentPanel(closePanel);
+      closePanel();
+      if (document.getElementById("tools-root")) renderToolsSection();
     } catch (err) {
       button.disabled = false; button.textContent = "Salvar";
       toast("Erro ao salvar documentação · " + err.message, true);
@@ -6688,11 +6886,8 @@ function openToolProcessFlow(id) {
   const laneIndexes = new Map(lanes.map((lane, index) => [JSON.stringify({
     module: lane.module, submodule: lane.submodule, group: lane.group
   }), index]));
-  const matrixColumns = `190px 96px repeat(${Math.max(steps.length, 1)}, 240px) 96px`;
-  const headers = steps.map((step, index) => `<div class="process-flow-column-head" style="grid-column:${index + 3};grid-row:1">Etapa ${index + 1}</div>`).join("");
-  const labels = lanes.map((lane, index) => `<header class="process-flow-lane-label" style="grid-column:1;grid-row:${index + 2}">
-    <span>Módulo</span><strong>${esc(lane.module)}</strong><span>Submódulo</span><b>${esc(lane.submodule)}</b><span>Grupo</span><b>${esc(lane.group)}</b>
-  </header>`).join("");
+  const matrixColumns = `96px repeat(${Math.max(steps.length, 1)}, minmax(220px, 1fr)) 96px`;
+  const headers = steps.map((step, index) => `<div class="process-flow-column-head" style="grid-column:${index + 2};grid-row:1">Etapa ${index + 1}</div>`).join("");
   const nodes = steps.map((step, index) => {
     const reference = safeHttpUrl(step.url);
     const key = JSON.stringify({
@@ -6700,11 +6895,17 @@ function openToolProcessFlow(id) {
       submodule: step.submodule || "Sem submódulo",
       group: step.group || "Sem grupo"
     });
-    return `<article class="process-flow-node process-flow-point" data-sequence="${index + 1}" style="grid-column:${index + 3};grid-row:${laneIndexes.get(key) + 2}">
+    const hierarchy = [
+      ["Módulo", step.module || "Não informado"],
+      ["Submódulo", step.submodule || "Não informado"],
+      ["Grupo", step.group || "Não informado"],
+      ["Tipo", step.type || "Não informado"]
+    ];
+    return `<article class="process-flow-node process-flow-point" data-sequence="${index + 1}" style="grid-column:${index + 2};grid-row:${laneIndexes.get(key) + 2}">
       <div class="process-flow-node-head"><span class="process-flow-number">${index + 1}</span><strong>${esc(step.system || "Sem sistema")}</strong></div>
-      ${step.type ? `<div class="process-flow-type">${esc(step.type)}</div>` : ""}
-      <p>${esc(step.details || "Sem detalhes.")}</p>
-      ${reference ? `<a href="${esc(reference)}" target="_blank" rel="noopener">Abrir URL ↗</a>` : ""}
+      <div class="process-flow-node-meta">${hierarchy.map(([label, value]) => `<div><span>${label}</span><b>${esc(value)}</b></div>`).join("")}</div>
+      <div class="process-flow-node-details"><span>Detalhes</span><p>${esc(step.details || "Sem detalhes.")}</p></div>
+      <div class="process-flow-node-url"><span>URL</span>${reference ? `<a href="${esc(reference)}" target="_blank" rel="noopener">${esc(step.url)} ↗</a>` : '<b>Não informada</b>'}</div>
     </article>`;
   }).join("");
   const systems = [...new Set(steps.map((step) => step.system).filter(Boolean))];
@@ -6716,15 +6917,13 @@ function openToolProcessFlow(id) {
       <div><span>Linhas</span><strong>${grouped.size}</strong></div>
     </div>
     <div class="process-flow-scroll">
-      ${steps.length ? `<div class="process-flow-matrix" style="grid-template-columns:${matrixColumns};grid-template-rows:34px repeat(${Math.max(lanes.length, 1)},minmax(170px,auto))">
-        <div class="process-flow-corner" style="grid-column:1;grid-row:1">Módulo / Submódulo / Grupo</div>
-        <div class="process-flow-column-head" style="grid-column:2;grid-row:1">Início</div>
+      ${steps.length ? `<div class="process-flow-matrix" style="grid-template-columns:${matrixColumns};grid-template-rows:34px repeat(${Math.max(lanes.length, 1)},minmax(250px,auto))">
+        <div class="process-flow-column-head process-flow-fixed-start" style="grid-column:1;grid-row:1">Início</div>
         ${headers}
-        <div class="process-flow-column-head" style="grid-column:${steps.length + 3};grid-row:1">Fim</div>
-        ${labels}
-        <div class="process-flow-terminal start process-flow-point" data-sequence="0" style="grid-column:2;grid-row:2 / span ${Math.max(lanes.length, 1)}"><span>Início</span></div>
+        <div class="process-flow-column-head process-flow-fixed-end" style="grid-column:${steps.length + 2};grid-row:1">Fim</div>
+        <div class="process-flow-terminal start process-flow-point" data-sequence="0" style="grid-column:1;grid-row:2 / span ${Math.max(lanes.length, 1)}"><span>Início</span></div>
         ${nodes}
-        <div class="process-flow-terminal end process-flow-point" data-sequence="${steps.length + 1}" style="grid-column:${steps.length + 3};grid-row:2 / span ${Math.max(lanes.length, 1)}"><span>Fim</span></div>
+        <div class="process-flow-terminal end process-flow-point" data-sequence="${steps.length + 1}" style="grid-column:${steps.length + 2};grid-row:2 / span ${Math.max(lanes.length, 1)}"><span>Fim</span></div>
       </div>` : '<div class="tool-empty">Nenhuma etapa cadastrada.</div>'}
     </div>
   </div><div class="modal-foot"><button class="btn" id="tool-process-flow-close">Fechar</button></div>`;
@@ -6740,6 +6939,7 @@ function openToolProcessFlow(id) {
     requestAnimationFrame(() => drawProcessFlowConnections(matrix));
     resizeObserver = new ResizeObserver(() => drawProcessFlowConnections(matrix));
     resizeObserver.observe(matrix);
+    matrix.closest(".process-flow-scroll")?.addEventListener("scroll", () => requestAnimationFrame(() => drawProcessFlowConnections(matrix)), { passive: true });
   }
 }
 

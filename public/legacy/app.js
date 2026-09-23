@@ -224,7 +224,8 @@ const REMOTE_TABLE = {
   productObjectives: "product_objective_templates",
   productGoals: "product_goal_templates",
   deliveryObjectives: "delivery_objectives",
-  deliveryGoals: "delivery_goals"
+  deliveryGoals: "delivery_goals",
+  processes: "training_processes"
 };
 const remoteTable = (tab) => REMOTE_TABLE[tab] || tab;
 const FIELD_REMAP = {
@@ -296,7 +297,8 @@ const DEMO = {
   productObjectives: [],
   productGoals: [],
   deliveryObjectives: [],
-  deliveryGoals: []
+  deliveryGoals: [],
+  processes: []
 };
 
 // ---------- REST Supabase ----------
@@ -5009,8 +5011,9 @@ function helpContentHtml() {
     <section class="help-section" id="help-tools"><h4>Ferramentas</h4><ul>
       <li><b>Arquivos:</b> catálogo de atalhos para pastas, como links do Google Drive, com nome e descrição. O CRM guarda o link, não copia os arquivos.</li>
       <li><b>E-mails:</b> ao criar uma entrega, o CRM cria automaticamente na HostGator uma conta formada pela raiz do CNPJ em <b>@ecommerce365.com.br</b>. A senha pode ser revelada ou copiada nesta tela.</li>
-      <li>Busca e seleção de colunas funcionam nas duas abas.</li>
-    </ul><p class="help-note"><b>Segurança:</b> as credenciais de e-mail são compartilhadas entre os usuários ativos do CRM e a senha permanece criptografada no Supabase. Os links de Arquivos continuam salvos somente neste navegador.</p></section>
+      <li><b>Processos:</b> biblioteca de procedimentos para treinamento, com área, sistema, público, responsável, nível, tempo estimado, material de apoio e passo a passo ordenado.</li>
+      <li>Busca, classificação, filtros e seleção de colunas funcionam nas tabelas de E-mails e Processos.</li>
+    </ul><p class="help-note"><b>Segurança:</b> as credenciais de e-mail são compartilhadas entre os usuários ativos do CRM e a senha permanece criptografada no Supabase. Processos podem ser consultados por usuários ativos e alterados apenas por administradores. Os links de Arquivos continuam salvos somente neste navegador.</p></section>
 
     <section class="help-section" id="help-admin"><h4>Administração e suporte</h4><ul>
       <li><b>LOG:</b> administradores consultam as alterações recentes registradas nas principais entidades.</li>
@@ -6151,13 +6154,22 @@ const TOOL_FOLDERS_KEY = "crm_tool_folders";
 const TOOL_EMAILS_KEY = "crm_tool_emails";
 const TOOL_COLUMN_DEFS = {
   files: [{ k: "name", h: "Nome" }, { k: "description", h: "Descrição" }, { k: "url", h: "Link" }],
-  emails: [{ k: "cnpj", h: "CNPJ" }, { k: "client", h: "Cliente" }, { k: "email", h: "Email" }, { k: "password", h: "Senha" }, { k: "tags", h: "Tags" }]
+  emails: [{ k: "cnpj", h: "CNPJ" }, { k: "client", h: "Cliente" }, { k: "email", h: "Email" }, { k: "password", h: "Senha" }, { k: "tags", h: "Tags" }],
+  processes: [
+    { k: "title", h: "Processo" }, { k: "area", h: "Área" }, { k: "system_name", h: "Sistema" },
+    { k: "audience", h: "Público" }, { k: "difficulty", h: "Nível" }, { k: "status", h: "Status" },
+    { k: "steps", h: "Etapas" }, { k: "version", h: "Versão" }, { k: "updated_at", h: "Atualizado em" }
+  ]
 };
 let toolsState = { section: "files", search: "", tables: {} };
 let remoteToolEmails = [];
 let remoteToolEmailsLoaded = false;
 let remoteToolEmailsLoading = false;
 let remoteToolEmailsError = "";
+let remoteToolProcesses = [];
+let remoteToolProcessesLoaded = false;
+let remoteToolProcessesLoading = false;
+let remoteToolProcessesError = "";
 
 function readToolRows(key) {
   try {
@@ -6188,6 +6200,7 @@ function openToolsModal(section = "files") {
   const headerCenter = `<div class="modal-header-tabs" role="tablist" aria-label="Ferramentas">
     <button class="modal-header-tab${section === "files" ? " active" : ""}" data-tools-tab="files" role="tab">Arquivos</button>
     <button class="modal-header-tab${section === "emails" ? " active" : ""}" data-tools-tab="emails" role="tab">Emails</button>
+    <button class="modal-header-tab${section === "processes" ? " active" : ""}" data-tools-tab="processes" role="tab">Processos</button>
   </div>`;
   shell("Ferramentas", `<div id="tools-root" class="tools-root"></div>${toolsDisabledFooter()}`, {
     cls: "full registrations-modal",
@@ -6219,10 +6232,10 @@ function toolEmailValue(account, key) {
   return String(account[key] || "—");
 }
 
-function toolsToolbarHtml(count, addTitle, addId) {
+function toolsToolbarHtml(count, addTitle, addId, canAdd = true) {
   return `<div class="tools-toolbar">
     <div class="registration-toolbar-left"><span class="muted">${count} item(ns)</span></div>
-    <div class="registration-toolbar-center"><input class="search registration-toolbar-search tools-search" placeholder="Buscar..." value="${esc(toolsState.search || "")}"><button class="btn primary plus" id="${addId}" title="${esc(addTitle)}">+</button></div>
+    <div class="registration-toolbar-center"><input class="search registration-toolbar-search tools-search" placeholder="Buscar..." value="${esc(toolsState.search || "")}">${canAdd ? `<button class="btn primary plus" id="${addId}" title="${esc(addTitle)}">+</button>` : ""}</div>
     <div class="registration-toolbar-right"><button class="btn tools-cols-btn" type="button" title="Selecionar colunas">⊞</button><button class="view active" type="button">Tabela</button><button class="view" type="button" disabled>Matriz</button><button class="view" type="button" disabled>Dashboard</button></div>
   </div>`;
 }
@@ -6240,7 +6253,7 @@ function wireToolsToolbar(root) {
     event.stopPropagation();
     openSecondaryColumnManager({
       scope: `tools:${toolsState.section}`,
-      label: toolsState.section === "files" ? "Arquivos" : "Emails",
+      label: toolsState.section === "files" ? "Arquivos" : toolsState.section === "emails" ? "Emails" : "Processos",
       definitions: TOOL_COLUMN_DEFS[toolsState.section],
       onChange: renderToolsSection
     });
@@ -6251,6 +6264,7 @@ function renderToolsSection() {
   const root = document.getElementById("tools-root");
   if (!root) return;
   if (toolsState.section === "emails") renderToolEmails(root);
+  else if (toolsState.section === "processes") renderToolProcesses(root);
   else renderToolFolders(root);
 }
 
@@ -6332,6 +6346,232 @@ function deleteToolFolder(id) {
   toast("Pasta excluída.");
 }
 
+const PROCESS_DIFFICULTY_LABEL = { basic: "Básico", intermediate: "Intermediário", advanced: "Avançado" };
+const PROCESS_STATUS_LABEL = { draft: "Rascunho", active: "Ativo", archived: "Arquivado" };
+
+function normalizeProcessSteps(value) {
+  let steps = value;
+  if (typeof steps === "string") {
+    try { steps = JSON.parse(steps); } catch (e) { steps = []; }
+  }
+  return Array.isArray(steps) ? steps.map((step, index) => ({
+    id: String(step?.id || crypto.randomUUID()),
+    title: String(step?.title || `Etapa ${index + 1}`).trim(),
+    instruction: String(step?.instruction || "").trim()
+  })) : [];
+}
+
+function toolProcessRows() {
+  return isLive() ? remoteToolProcesses : (DEMO.processes || []);
+}
+
+function toolProcessValue(process, key) {
+  if (key === "difficulty") return PROCESS_DIFFICULTY_LABEL[process.difficulty] || process.difficulty || "—";
+  if (key === "status") return PROCESS_STATUS_LABEL[process.status] || process.status || "—";
+  if (key === "steps") return String(normalizeProcessSteps(process.steps).length);
+  if (key === "tags") return normalizeTextList(process.tags).join(", ");
+  if (key === "updated_at") return process.updated_at ? new Date(process.updated_at).toLocaleDateString("pt-BR") : "—";
+  return String(process[key] || "—");
+}
+
+async function loadRemoteToolProcesses() {
+  if (!isLive() || remoteToolProcessesLoading) return;
+  remoteToolProcessesLoading = true;
+  remoteToolProcessesError = "";
+  try {
+    remoteToolProcesses = await fetchTable("processes");
+    remoteToolProcessesLoaded = true;
+  } catch (err) {
+    remoteToolProcessesError = err.message;
+  } finally {
+    remoteToolProcessesLoading = false;
+    const root = document.getElementById("tools-root");
+    if (root && toolsState.section === "processes") renderToolProcesses(root);
+  }
+}
+
+function processFilterStrip(tableState) {
+  const activeFilters = Object.entries(tableState.filters).filter(([, values]) => values?.size);
+  return `<div class="registration-filter-strip"><div class="registration-filter-badges">${activeFilters.map(([key, values]) => {
+    const label = TOOL_COLUMN_DEFS.processes.find((col) => col.k === key)?.h || key;
+    return `<button class="registration-filter-badge tool-filter-badge" data-key="${esc(key)}" title="Limpar filtro"><span>${esc(label)}: ${esc([...values].join(", "))}</span><b>×</b></button>`;
+  }).join("")}</div><button class="filter-clear-all tool-filter-clear-all" type="button"${activeFilters.length < 2 ? " hidden" : ""}><span aria-hidden="true">×</span> Limpar tudo</button></div>`;
+}
+
+function renderToolProcesses(root) {
+  if (isLive() && !remoteToolProcessesLoaded && !remoteToolProcessesLoading && !remoteToolProcessesError) loadRemoteToolProcesses();
+  const allProcesses = toolProcessRows();
+  const query = toolsState.search.trim().toLocaleLowerCase("pt-BR");
+  const tableState = toolTableState("processes");
+  const processes = allProcesses.filter((process) => {
+    const searchable = [process.title, process.area, process.system_name, process.objective, process.audience,
+      process.responsible_job_title, process.reference_url, ...normalizeTextList(process.tags)];
+    const matchesSearch = !query || searchable.some((value) => String(value || "").toLocaleLowerCase("pt-BR").includes(query));
+    return matchesSearch && Object.entries(tableState.filters).every(([key, selected]) =>
+      !selected?.size || selected.has(toolProcessValue(process, key))
+    );
+  });
+  if (tableState.sortKey) {
+    processes.sort((a, b) => toolProcessValue(a, tableState.sortKey).localeCompare(
+      toolProcessValue(b, tableState.sortKey), "pt-BR", { numeric: true, sensitivity: "base" }
+    ) * tableState.sortDir);
+  }
+  const columns = visibleToolColumns("processes");
+  const rows = processes.length ? processes.map((process) => `<tr data-id="${esc(process.id)}">
+    ${columns.map((col) => {
+      if (col.k === "title") return `<td><button class="process-open-link" data-id="${esc(process.id)}">${esc(process.title || "—")}</button><div class="muted process-row-objective">${esc(process.objective || "Sem objetivo informado")}</div></td>`;
+      if (col.k === "difficulty") return `<td>${badge(process.difficulty === "advanced" ? "proposal" : process.difficulty === "intermediate" ? "qualification" : "lead", toolProcessValue(process, col.k))}</td>`;
+      if (col.k === "status") return `<td>${badge(process.status === "active" ? "won" : process.status === "archived" ? "lost" : "lead", toolProcessValue(process, col.k))}</td>`;
+      if (col.k === "steps") return `<td>${normalizeProcessSteps(process.steps).length} etapa(s)</td>`;
+      if (col.k === "version") return `<td>v${esc(process.version || 1)}</td>`;
+      return `<td>${esc(toolProcessValue(process, col.k))}</td>`;
+    }).join("")}
+    <td><span class="tool-row-actions"><button class="tool-icon-btn tool-process-open" data-id="${esc(process.id)}" title="Abrir processo">◉</button>${currentUserIsAdmin() ? `<button class="tool-icon-btn tool-process-edit" data-id="${esc(process.id)}" title="Editar processo">✎</button><button class="tool-icon-btn tool-process-delete" data-id="${esc(process.id)}" title="Excluir processo">×</button>` : ""}</span></td>
+  </tr>`).join("") : `<tr><td colspan="${columns.length + 1}" class="tool-empty">Nenhum processo cadastrado.</td></tr>`;
+  const feedback = remoteToolProcessesLoading ? '<div class="tool-empty">Carregando processos...</div>'
+    : remoteToolProcessesError ? `<div class="tool-empty">Não foi possível carregar os processos: ${esc(remoteToolProcessesError)}</div>` : "";
+  root.innerHTML = `${toolsToolbarHtml(processes.length, "Adicionar processo", "tool-process-add", currentUserIsAdmin())}${processFilterStrip(tableState)}${feedback}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  wireToolsToolbar(root);
+  wireSecondaryTableSelection(root.querySelector("table"), "tools:processes");
+  document.getElementById("tool-process-add")?.addEventListener("click", () => openToolProcessForm());
+  root.querySelectorAll(".process-open-link,.tool-process-open").forEach((button) => button.addEventListener("click", () => openToolProcess(button.dataset.id)));
+  root.querySelectorAll(".tool-process-edit").forEach((button) => button.addEventListener("click", () => openToolProcessForm(button.dataset.id)));
+  root.querySelectorAll(".tool-process-delete").forEach((button) => button.addEventListener("click", () => deleteToolProcess(button.dataset.id)));
+  root.querySelectorAll("th[data-tool-key]").forEach((header) => header.addEventListener("click", (event) => {
+    const key = header.dataset.toolKey;
+    if (event.ctrlKey || event.metaKey) { openToolColumnFilter(header, key, allProcesses, toolProcessValue, "processes"); return; }
+    if (tableState.sortKey === key) tableState.sortDir *= -1;
+    else { tableState.sortKey = key; tableState.sortDir = 1; }
+    renderToolsSection();
+  }));
+  root.querySelectorAll(".tool-filter-badge").forEach((filter) => filter.addEventListener("click", () => {
+    delete tableState.filters[filter.dataset.key]; renderToolsSection();
+  }));
+  root.querySelector(".tool-filter-clear-all")?.addEventListener("click", () => { tableState.filters = {}; renderToolsSection(); });
+}
+
+function closeToolProcessPanel(closePanel) {
+  closePanel?.();
+  if (document.getElementById("tools-root")) renderToolsSection();
+  else openToolsModal("processes");
+}
+
+function openToolProcess(id) {
+  const process = toolProcessRows().find((item) => item.id === id);
+  if (!process) return;
+  const steps = normalizeProcessSteps(process.steps);
+  const reference = safeHttpUrl(process.reference_url);
+  const content = `<div class="process-detail">
+    <div class="process-detail-meta"><span>${esc(process.area || "Sem área")}</span><span>${esc(process.system_name || "Sem sistema")}</span><span>${esc(PROCESS_DIFFICULTY_LABEL[process.difficulty] || process.difficulty)}</span><span>v${esc(process.version || 1)}</span>${process.estimated_minutes ? `<span>${esc(process.estimated_minutes)} min</span>` : ""}</div>
+    <section><h4>Objetivo</h4><p>${esc(process.objective || "Não informado.")}</p></section>
+    <section><h4>Público e responsabilidade</h4><p>${esc(process.audience || "Todos")} · ${esc(process.responsible_job_title || "Cargo não definido")}</p></section>
+    ${reference ? `<a class="btn process-reference" href="${esc(reference)}" target="_blank" rel="noopener">Abrir material de apoio ↗</a>` : ""}
+    <section><h4>Passo a passo</h4><ol class="process-steps-view">${steps.map((step) => `<li><strong>${esc(step.title)}</strong>${step.instruction ? `<p>${esc(step.instruction)}</p>` : ""}</li>`).join("") || "<li>Nenhuma etapa cadastrada.</li>"}</ol></section>
+    ${normalizeTextList(process.tags).length ? `<section><h4>Tags</h4><div class="tool-tags">${normalizeTextList(process.tags).map((tag) => `<span class="tool-tag">${esc(tag)}</span>`).join("")}</div></section>` : ""}
+  </div><div class="modal-foot"><button class="btn" id="tool-process-close">Fechar</button>${currentUserIsAdmin() ? '<button class="btn primary" id="tool-process-detail-edit">Editar</button>' : ""}</div>`;
+  const closePanel = document.getElementById("tools-root")
+    ? nestedSidePanel(process.title, content, { closeOnOverlay: true })
+    : sidePanel(process.title, content, { closeOnOverlay: true, onClose: () => openToolsModal("processes") });
+  document.getElementById("tool-process-close").addEventListener("click", () => closeToolProcessPanel(closePanel));
+  document.getElementById("tool-process-detail-edit")?.addEventListener("click", () => { closePanel(); openToolProcessForm(id); });
+}
+
+function processStepEditorHtml(steps) {
+  return steps.map((step, index) => `<div class="process-step-editor" data-index="${index}">
+    <div class="process-step-number">${index + 1}</div><div class="process-step-fields"><input class="process-step-title" value="${esc(step.title)}" placeholder="Título da etapa"><textarea class="process-step-instruction" rows="3" placeholder="Explique como executar esta etapa">${esc(step.instruction)}</textarea></div>
+    <div class="process-step-actions"><button class="tool-icon-btn process-step-up" type="button" title="Subir">↑</button><button class="tool-icon-btn process-step-down" type="button" title="Descer">↓</button><button class="tool-icon-btn process-step-remove" type="button" title="Excluir">×</button></div>
+  </div>`).join("");
+}
+
+function openToolProcessForm(id = null) {
+  if (!requireCurrentUserAdmin("Processos")) return;
+  const current = toolProcessRows().find((item) => item.id === id) || {};
+  let draftSteps = normalizeProcessSteps(current.steps);
+  if (!draftSteps.length) draftSteps = [{ id: crypto.randomUUID(), title: "", instruction: "" }];
+  const content = `<div class="form process-form">
+    <div class="field full"><label>Nome do processo *</label><input id="tool-process-title" value="${esc(current.title || "")}" placeholder="Ex.: Criar pedido de venda no Bling"></div>
+    <div class="field"><label>Área</label><input id="tool-process-area" value="${esc(current.area || "")}" placeholder="Ex.: Operações"></div>
+    <div class="field"><label>Sistema</label><input id="tool-process-system" value="${esc(current.system_name || "")}" placeholder="Ex.: Bling"></div>
+    <div class="field full"><label>Objetivo</label><textarea id="tool-process-objective" rows="3" placeholder="O que este processo entrega e quando deve ser usado">${esc(current.objective || "")}</textarea></div>
+    <div class="field"><label>Público</label><input id="tool-process-audience" value="${esc(current.audience || "")}" placeholder="Ex.: Novos analistas"></div>
+    <div class="field"><label>Cargo responsável</label><input id="tool-process-role" value="${esc(current.responsible_job_title || "")}" placeholder="Ex.: Analista de operações"></div>
+    <div class="field"><label>Nível</label><select id="tool-process-difficulty">${Object.entries(PROCESS_DIFFICULTY_LABEL).map(([value, label]) => `<option value="${value}"${(current.difficulty || "basic") === value ? " selected" : ""}>${label}</option>`).join("")}</select></div>
+    <div class="field"><label>Status</label><select id="tool-process-status">${Object.entries(PROCESS_STATUS_LABEL).map(([value, label]) => `<option value="${value}"${(current.status || "draft") === value ? " selected" : ""}>${label}</option>`).join("")}</select></div>
+    <div class="field"><label>Tempo estimado (minutos)</label><input id="tool-process-time" type="number" min="1" max="1440" value="${esc(current.estimated_minutes || "")}"></div>
+    <div class="field"><label>Tags</label><input id="tool-process-tags" value="${esc(normalizeTextList(current.tags).join(", "))}" placeholder="Bling, Nota fiscal, Financeiro"></div>
+    <div class="field full"><label>Link de apoio</label><input id="tool-process-reference" type="url" value="${esc(current.reference_url || "")}" placeholder="https://..."></div>
+    <div class="field full"><div class="process-steps-head"><label>Passo a passo *</label><button class="btn" id="tool-process-step-add" type="button">+ Etapa</button></div><div id="tool-process-steps" class="process-steps-editor"></div></div>
+  </div><div class="modal-foot"><button class="btn" id="tool-process-cancel">Cancelar</button><button class="btn primary" id="tool-process-save">Salvar</button></div>`;
+  const closePanel = document.getElementById("tools-root")
+    ? nestedSidePanel(id ? "Editar processo" : "Novo processo", content, { closeOnOverlay: true })
+    : sidePanel(id ? "Editar processo" : "Novo processo", content, { closeOnOverlay: true, onClose: () => openToolsModal("processes") });
+  const stepsRoot = document.getElementById("tool-process-steps");
+  const drawSteps = () => {
+    stepsRoot.innerHTML = processStepEditorHtml(draftSteps);
+    stepsRoot.querySelectorAll(".process-step-title,.process-step-instruction").forEach((input) => input.addEventListener("input", () => {
+      const index = Number(input.closest(".process-step-editor").dataset.index);
+      draftSteps[index][input.classList.contains("process-step-title") ? "title" : "instruction"] = input.value;
+    }));
+    stepsRoot.querySelectorAll(".process-step-remove").forEach((button) => button.addEventListener("click", () => { draftSteps.splice(Number(button.closest(".process-step-editor").dataset.index), 1); drawSteps(); }));
+    stepsRoot.querySelectorAll(".process-step-up").forEach((button) => button.addEventListener("click", () => { const index = Number(button.closest(".process-step-editor").dataset.index); if (index > 0) { [draftSteps[index - 1], draftSteps[index]] = [draftSteps[index], draftSteps[index - 1]]; drawSteps(); } }));
+    stepsRoot.querySelectorAll(".process-step-down").forEach((button) => button.addEventListener("click", () => { const index = Number(button.closest(".process-step-editor").dataset.index); if (index < draftSteps.length - 1) { [draftSteps[index + 1], draftSteps[index]] = [draftSteps[index], draftSteps[index + 1]]; drawSteps(); } }));
+  };
+  drawSteps();
+  document.getElementById("tool-process-step-add").addEventListener("click", () => { draftSteps.push({ id: crypto.randomUUID(), title: "", instruction: "" }); drawSteps(); stepsRoot.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "nearest" }); });
+  document.getElementById("tool-process-cancel").addEventListener("click", () => closeToolProcessPanel(closePanel));
+  document.getElementById("tool-process-save").addEventListener("click", async () => {
+    const title = document.getElementById("tool-process-title").value.trim();
+    const referenceUrl = document.getElementById("tool-process-reference").value.trim();
+    const steps = draftSteps.map((step) => ({ ...step, title: step.title.trim(), instruction: step.instruction.trim() })).filter((step) => step.title || step.instruction);
+    if (!title) { toast("Informe o nome do processo.", true); return; }
+    if (referenceUrl && !safeHttpUrl(referenceUrl)) { toast("Informe um link de apoio válido, começando com http:// ou https://.", true); return; }
+    if (!steps.length || steps.some((step) => !step.title)) { toast("Cadastre ao menos uma etapa com título.", true); return; }
+    const button = document.getElementById("tool-process-save");
+    button.disabled = true; button.textContent = "Salvando...";
+    const body = {
+      title,
+      area: document.getElementById("tool-process-area").value.trim() || null,
+      system_name: document.getElementById("tool-process-system").value.trim() || null,
+      objective: document.getElementById("tool-process-objective").value.trim() || null,
+      audience: document.getElementById("tool-process-audience").value.trim() || null,
+      responsible_job_title: document.getElementById("tool-process-role").value.trim() || null,
+      difficulty: document.getElementById("tool-process-difficulty").value,
+      status: document.getElementById("tool-process-status").value,
+      estimated_minutes: Number(document.getElementById("tool-process-time").value) || null,
+      tags: normalizeTextList(document.getElementById("tool-process-tags").value),
+      reference_url: referenceUrl || null,
+      steps,
+      version: id ? Number(current.version || 1) + 1 : 1,
+      updated_at: new Date().toISOString()
+    };
+    try {
+      const saved = id ? await updateRow("processes", id, body) : await createRow("processes", body);
+      if (isLive()) {
+        const index = remoteToolProcesses.findIndex((item) => item.id === saved.id);
+        if (index >= 0) remoteToolProcesses[index] = saved; else remoteToolProcesses.unshift(saved);
+        remoteToolProcessesLoaded = true;
+      }
+      toast("Processo salvo.");
+      closeToolProcessPanel(closePanel);
+    } catch (err) {
+      button.disabled = false; button.textContent = "Salvar";
+      toast("Erro ao salvar processo · " + err.message, true);
+    }
+  });
+}
+
+async function deleteToolProcess(id) {
+  if (!requireCurrentUserAdmin("Processos")) return;
+  const process = toolProcessRows().find((item) => item.id === id);
+  if (!process || !window.confirm(`Excluir o processo "${process.title}"?`)) return;
+  try {
+    await deleteRow("processes", id);
+    if (isLive()) remoteToolProcesses = remoteToolProcesses.filter((item) => item.id !== id);
+    renderToolsSection();
+    toast("Processo excluído.");
+  } catch (err) { toast("Erro ao excluir processo · " + err.message, true); }
+}
+
 function toolEmailRows() {
   return APP_VARIANT === "web" && isLive() ? remoteToolEmails : readToolRows(TOOL_EMAILS_KEY);
 }
@@ -6400,7 +6640,7 @@ function renderToolEmails(root) {
   root.querySelectorAll(".tool-email-delete").forEach((button) => button.addEventListener("click", () => deleteToolEmail(button.dataset.id)));
   root.querySelectorAll("th[data-tool-key]").forEach((header) => header.addEventListener("click", (event) => {
     const key = header.dataset.toolKey;
-    if (event.ctrlKey || event.metaKey) { openToolEmailColumnFilter(header, key, allAccounts); return; }
+    if (event.ctrlKey || event.metaKey) { openToolColumnFilter(header, key, allAccounts, toolEmailValue, "emails"); return; }
     if (tableState.sortKey === key) tableState.sortDir *= -1;
     else { tableState.sortKey = key; tableState.sortDir = 1; }
     renderToolsSection();
@@ -6415,12 +6655,12 @@ function renderToolEmails(root) {
   });
 }
 
-function openToolEmailColumnFilter(header, key, accounts) {
+function openToolColumnFilter(header, key, rows, valueFn, section = toolsState.section) {
   document.getElementById("tool-filter-dd")?.remove();
-  const values = [...new Set(accounts.map((account) => toolEmailValue(account, key)))].sort((a, b) =>
+  const values = [...new Set(rows.map((row) => valueFn(row, key)))].sort((a, b) =>
     a.localeCompare(b, "pt-BR", { numeric: true, sensitivity: "base" })
   );
-  const tableState = toolTableState("emails");
+  const tableState = toolTableState(section);
   let selected = new Set(tableState.filters[key] || []);
   const rect = header.getBoundingClientRect();
   const panel = document.createElement("div");
@@ -6429,7 +6669,7 @@ function openToolEmailColumnFilter(header, key, accounts) {
   panel.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 300))}px`;
   panel.style.top = `${rect.bottom + 4}px`;
   panel.style.maxHeight = `${Math.max(220, window.innerHeight - rect.bottom - 20)}px`;
-  panel.innerHTML = `<div class="dd-head"><span>Filtrar · ${esc(TOOL_COLUMN_DEFS.emails.find((col) => col.k === key)?.h || key)}</span><span>${values.length}</span></div>
+  panel.innerHTML = `<div class="dd-head"><span>Filtrar · ${esc(TOOL_COLUMN_DEFS[section].find((col) => col.k === key)?.h || key)}</span><span>${values.length}</span></div>
     <div class="dd-search"><input placeholder="Buscar..."></div><div class="dd-list"></div>
     <div class="dd-foot"><button class="btn tool-filter-all">Todos</button><button class="btn danger tool-filter-clear">Limpar</button><button class="btn primary tool-filter-apply">Aplicar</button></div>`;
   document.body.appendChild(panel);

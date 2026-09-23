@@ -385,6 +385,29 @@
   body.light .tool-tag{border-color:#91b9d4;background:#e7f4fc;color:#175b83}
   .tool-icon-btn{width:27px;height:27px;padding:0;border:1px solid var(--border);border-radius:5px;background:var(--panel2);color:var(--muted);cursor:pointer}
   .tool-icon-btn:hover{color:var(--text);background:var(--row)}
+  .process-open-link{display:block;max-width:100%;padding:0;border:0;background:transparent;color:var(--text);font:inherit;font-weight:700;text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .process-open-link:hover{color:var(--cyan)}
+  .process-row-objective{max-width:420px;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:10.5px}
+  .process-detail{display:flex;flex-direction:column;gap:18px;padding:18px}
+  .process-detail section{padding-top:14px;border-top:1px solid var(--border2)}
+  .process-detail section:first-of-type{padding-top:0;border-top:0}
+  .process-detail h4{margin:0 0 7px;font-size:11px;color:var(--muted);text-transform:uppercase}
+  .process-detail p{margin:0;line-height:1.55;white-space:pre-wrap}
+  .process-detail-meta{display:flex;flex-wrap:wrap;gap:5px}
+  .process-detail-meta span{display:inline-flex;align-items:center;min-height:22px;padding:2px 7px;border:1px solid var(--border);border-radius:4px;background:var(--panel2);color:var(--muted);font-size:10px;font-weight:700;text-transform:uppercase}
+  .process-reference{align-self:flex-start;text-decoration:none}
+  .process-steps-view{display:flex;flex-direction:column;gap:14px;margin:0;padding-left:28px}
+  .process-steps-view li{padding-left:5px;line-height:1.45}
+  .process-steps-view li::marker{color:var(--cyan);font-weight:800}
+  .process-steps-view p{margin-top:4px;color:var(--muted)}
+  .process-steps-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .process-steps-editor{display:flex;flex-direction:column;gap:8px}
+  .process-step-editor{display:grid;grid-template-columns:28px minmax(0,1fr) 28px;align-items:start;gap:8px;padding:9px 0;border-bottom:1px solid var(--border2)}
+  .process-step-number{display:grid;place-items:center;width:28px;height:28px;border:1px solid var(--border);border-radius:4px;background:var(--panel2);color:var(--cyan);font-size:11px;font-weight:800}
+  .process-step-fields{display:flex;min-width:0;flex-direction:column;gap:6px}
+  .process-step-fields textarea{min-height:72px}
+  .process-step-actions{display:flex;flex-direction:column;gap:4px}
+  .process-step-actions .tool-icon-btn{width:28px;height:28px}
   .registrations-root .product-activity-list td:first-child strong{color:var(--text)}
   .registrations-product{display:grid;gap:3px}
   .registrations-product small{color:var(--muted);font-size:10.5px}
@@ -666,6 +689,9 @@
     .modal-header-add,.activity-form-drawer .modal-foot .primary,.task-create,.registration-cols-btn,.project-cols-btn,.tools-cols-btn{display:none!important}
     .rowbtn.edit,.rowbtn.del,.rowbtn.del-import,.rowbtn.convert,.reg-template-clone,.reg-template-edit,.reg-product-edit,.reg-user-edit,.tool-email-edit,.tool-email-delete{display:none!important}
     .activity-form-drawer{width:100vw;max-width:none}
+    .process-detail{padding:14px 12px}
+    .process-step-editor{grid-template-columns:28px minmax(0,1fr)}
+    .process-step-actions{grid-column:2;flex-direction:row;justify-content:flex-end}
   }
   .form{padding:16px 18px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .form .full{grid-column:1 / -1}

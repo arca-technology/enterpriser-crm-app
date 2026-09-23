@@ -5033,7 +5033,7 @@ function helpContentHtml() {
     <section class="help-section" id="help-tools"><h4>Ferramentas</h4><ul>
       <li><b>Arquivos:</b> catálogo de atalhos para pastas, como links do Google Drive, com nome e descrição. O CRM guarda o link, não copia os arquivos.</li>
       <li><b>E-mails:</b> ao criar uma entrega, o CRM cria automaticamente na HostGator uma conta formada pela raiz do CNPJ em <b>@ecommerce365.com.br</b>. A senha pode ser revelada ou copiada nesta tela.</li>
-      <li><b>Processos:</b> biblioteca de procedimentos para treinamento, com área, sistema, público, responsável, nível, tempo estimado, material de apoio e passo a passo ordenado. O botão de fluxo transforma as etapas em um diagrama visual para consulta e apresentação.</li>
+      <li><b>Processos:</b> biblioteca de treinamento organizada por nome, categoria e tags. Cada etapa registra sistema, módulo, submódulo, grupo, tipo, URL e detalhes. O botão de fluxo agrupa as etapas visualmente por módulo, submódulo e grupo.</li>
       <li>Busca, classificação, filtros e seleção de colunas funcionam nas tabelas de E-mails e Processos.</li>
     </ul><p class="help-note"><b>Segurança:</b> as credenciais de e-mail são compartilhadas entre os usuários ativos do CRM e a senha permanece criptografada no Supabase. Processos podem ser consultados por usuários ativos e alterados apenas por administradores. Os links de Arquivos continuam salvos somente neste navegador.</p></section>
 
@@ -6178,9 +6178,8 @@ const TOOL_COLUMN_DEFS = {
   files: [{ k: "name", h: "Nome" }, { k: "description", h: "Descrição" }, { k: "url", h: "Link" }],
   emails: [{ k: "cnpj", h: "CNPJ" }, { k: "client", h: "Cliente" }, { k: "email", h: "Email" }, { k: "password", h: "Senha" }, { k: "tags", h: "Tags" }],
   processes: [
-    { k: "title", h: "Processo" }, { k: "area", h: "Área" }, { k: "system_name", h: "Sistema" },
-    { k: "audience", h: "Público" }, { k: "difficulty", h: "Nível" }, { k: "status", h: "Status" },
-    { k: "steps", h: "Etapas" }, { k: "version", h: "Versão" }, { k: "updated_at", h: "Atualizado em" }
+    { k: "title", h: "Nome do processo" }, { k: "category", h: "Categoria" },
+    { k: "tags", h: "Tags" }, { k: "steps", h: "Etapas" }
   ]
 };
 let toolsState = { section: "files", search: "", tables: {} };
@@ -6368,18 +6367,20 @@ function deleteToolFolder(id) {
   toast("Pasta excluída.");
 }
 
-const PROCESS_DIFFICULTY_LABEL = { basic: "Básico", intermediate: "Intermediário", advanced: "Avançado" };
-const PROCESS_STATUS_LABEL = { draft: "Rascunho", active: "Ativo", archived: "Arquivado" };
-
 function normalizeProcessSteps(value) {
   let steps = value;
   if (typeof steps === "string") {
     try { steps = JSON.parse(steps); } catch (e) { steps = []; }
   }
-  return Array.isArray(steps) ? steps.map((step, index) => ({
+  return Array.isArray(steps) ? steps.map((step) => ({
     id: String(step?.id || crypto.randomUUID()),
-    title: String(step?.title || `Etapa ${index + 1}`).trim(),
-    instruction: String(step?.instruction || "").trim()
+    system: String(step?.system || "").trim(),
+    module: String(step?.module || step?.title || "").trim(),
+    submodule: String(step?.submodule || "").trim(),
+    group: String(step?.group || "").trim(),
+    type: String(step?.type || "").trim(),
+    url: String(step?.url || "").trim(),
+    details: String(step?.details || step?.instruction || "").trim()
   })) : [];
 }
 
@@ -6388,11 +6389,8 @@ function toolProcessRows() {
 }
 
 function toolProcessValue(process, key) {
-  if (key === "difficulty") return PROCESS_DIFFICULTY_LABEL[process.difficulty] || process.difficulty || "—";
-  if (key === "status") return PROCESS_STATUS_LABEL[process.status] || process.status || "—";
   if (key === "steps") return String(normalizeProcessSteps(process.steps).length);
   if (key === "tags") return normalizeTextList(process.tags).join(", ");
-  if (key === "updated_at") return process.updated_at ? new Date(process.updated_at).toLocaleDateString("pt-BR") : "—";
   return String(process[key] || "—");
 }
 
@@ -6426,8 +6424,10 @@ function renderToolProcesses(root) {
   const query = toolsState.search.trim().toLocaleLowerCase("pt-BR");
   const tableState = toolTableState("processes");
   const processes = allProcesses.filter((process) => {
-    const searchable = [process.title, process.area, process.system_name, process.objective, process.audience,
-      process.responsible_job_title, process.reference_url, ...normalizeTextList(process.tags)];
+    const stepValues = normalizeProcessSteps(process.steps).flatMap((step) =>
+      [step.system, step.module, step.submodule, step.group, step.type, step.url, step.details]
+    );
+    const searchable = [process.title, process.category, ...normalizeTextList(process.tags), ...stepValues];
     const matchesSearch = !query || searchable.some((value) => String(value || "").toLocaleLowerCase("pt-BR").includes(query));
     return matchesSearch && Object.entries(tableState.filters).every(([key, selected]) =>
       !selected?.size || selected.has(toolProcessValue(process, key))
@@ -6441,11 +6441,9 @@ function renderToolProcesses(root) {
   const columns = visibleToolColumns("processes");
   const rows = processes.length ? processes.map((process) => `<tr data-id="${esc(process.id)}">
     ${columns.map((col) => {
-      if (col.k === "title") return `<td><button class="process-open-link" data-id="${esc(process.id)}">${esc(process.title || "—")}</button><div class="muted process-row-objective">${esc(process.objective || "Sem objetivo informado")}</div></td>`;
-      if (col.k === "difficulty") return `<td>${badge(process.difficulty === "advanced" ? "proposal" : process.difficulty === "intermediate" ? "qualification" : "lead", toolProcessValue(process, col.k))}</td>`;
-      if (col.k === "status") return `<td>${badge(process.status === "active" ? "won" : process.status === "archived" ? "lost" : "lead", toolProcessValue(process, col.k))}</td>`;
+      if (col.k === "title") return `<td><button class="process-open-link" data-id="${esc(process.id)}">${esc(process.title || "—")}</button></td>`;
+      if (col.k === "tags") return `<td><span class="tool-tags">${normalizeTextList(process.tags).map((tag) => `<span class="tool-tag">${esc(tag)}</span>`).join("") || '<span class="muted">—</span>'}</span></td>`;
       if (col.k === "steps") return `<td>${normalizeProcessSteps(process.steps).length} etapa(s)</td>`;
-      if (col.k === "version") return `<td>v${esc(process.version || 1)}</td>`;
       return `<td>${esc(toolProcessValue(process, col.k))}</td>`;
     }).join("")}
     <td><span class="tool-row-actions"><button class="tool-icon-btn tool-process-flow" data-id="${esc(process.id)}" title="Ver fluxo visual">⇢</button><button class="tool-icon-btn tool-process-open" data-id="${esc(process.id)}" title="Abrir processo">◉</button>${currentUserIsAdmin() ? `<button class="tool-icon-btn tool-process-edit" data-id="${esc(process.id)}" title="Editar processo">✎</button><button class="tool-icon-btn tool-process-delete" data-id="${esc(process.id)}" title="Excluir processo">×</button>` : ""}</span></td>
@@ -6483,14 +6481,19 @@ function openToolProcess(id) {
   const process = toolProcessRows().find((item) => item.id === id);
   if (!process) return;
   const steps = normalizeProcessSteps(process.steps);
-  const reference = safeHttpUrl(process.reference_url);
   const content = `<div class="process-detail">
-    <div class="process-detail-meta"><span>${esc(process.area || "Sem área")}</span><span>${esc(process.system_name || "Sem sistema")}</span><span>${esc(PROCESS_DIFFICULTY_LABEL[process.difficulty] || process.difficulty)}</span><span>v${esc(process.version || 1)}</span>${process.estimated_minutes ? `<span>${esc(process.estimated_minutes)} min</span>` : ""}</div>
-    <section><h4>Objetivo</h4><p>${esc(process.objective || "Não informado.")}</p></section>
-    <section><h4>Público e responsabilidade</h4><p>${esc(process.audience || "Todos")} · ${esc(process.responsible_job_title || "Cargo não definido")}</p></section>
-    ${reference ? `<a class="btn process-reference" href="${esc(reference)}" target="_blank" rel="noopener">Abrir material de apoio ↗</a>` : ""}
-    <section><h4>Passo a passo</h4><ol class="process-steps-view">${steps.map((step) => `<li><strong>${esc(step.title)}</strong>${step.instruction ? `<p>${esc(step.instruction)}</p>` : ""}</li>`).join("") || "<li>Nenhuma etapa cadastrada.</li>"}</ol></section>
+    <div class="process-detail-meta"><span>${esc(process.category || "Sem categoria")}</span><span>${steps.length} etapa(s)</span><span>v${esc(process.version || 1)}</span></div>
     ${normalizeTextList(process.tags).length ? `<section><h4>Tags</h4><div class="tool-tags">${normalizeTextList(process.tags).map((tag) => `<span class="tool-tag">${esc(tag)}</span>`).join("")}</div></section>` : ""}
+    <section><h4>Etapas</h4><div class="process-detail-steps">${steps.map((step, index) => {
+      const reference = safeHttpUrl(step.url);
+      const hierarchy = [step.module, step.submodule, step.group].filter(Boolean).join(" › ");
+      return `<article class="process-detail-step">
+        <div class="process-detail-step-head"><span>${index + 1}</span><strong>${esc(hierarchy || "Etapa sem classificação")}</strong></div>
+        <div class="process-detail-step-meta"><b>${esc(step.system || "Sem sistema")}</b>${step.type ? `<em>${esc(step.type)}</em>` : ""}</div>
+        <p>${esc(step.details || "Sem detalhes.")}</p>
+        ${reference ? `<a href="${esc(reference)}" target="_blank" rel="noopener">Abrir URL ↗</a>` : ""}
+      </article>`;
+    }).join("") || '<p class="muted">Nenhuma etapa cadastrada.</p>'}</div></section>
   </div><div class="modal-foot"><button class="btn" id="tool-process-close">Fechar</button><button class="btn" id="tool-process-detail-flow">⇢ Fluxo visual</button>${currentUserIsAdmin() ? '<button class="btn primary" id="tool-process-detail-edit">Editar</button>' : ""}</div>`;
   const closePanel = document.getElementById("tools-root")
     ? nestedSidePanel(process.title, content, { closeOnOverlay: true })
@@ -6504,31 +6507,47 @@ function openToolProcessFlow(id) {
   const process = toolProcessRows().find((item) => item.id === id);
   if (!process) return;
   const steps = normalizeProcessSteps(process.steps);
-  const nodes = steps.map((step, index) => `<article class="process-flow-node">
-    <div class="process-flow-node-head"><span class="process-flow-number">${index + 1}</span><strong>${esc(step.title)}</strong></div>
-    <p>${esc(step.instruction || "Sem instrução adicional.")}</p>
-  </article>`);
-  const sequence = [];
-  nodes.forEach((node, index) => {
-    sequence.push(node);
-    if (index < nodes.length - 1) sequence.push('<div class="process-flow-connector" aria-hidden="true"><span>→</span></div>');
+  const grouped = new Map();
+  steps.forEach((step, index) => {
+    const path = {
+      module: step.module || "Sem módulo",
+      submodule: step.submodule || "Sem submódulo",
+      group: step.group || "Sem grupo"
+    };
+    const key = JSON.stringify(path);
+    if (!grouped.has(key)) grouped.set(key, { ...path, steps: [] });
+    grouped.get(key).steps.push({ ...step, number: index + 1 });
   });
+  const lanes = [...grouped.values()].map((lane) => {
+    const sequence = lane.steps.map((step) => {
+      const reference = safeHttpUrl(step.url);
+      return `<article class="process-flow-node">
+        <div class="process-flow-node-head"><span class="process-flow-number">${step.number}</span><strong>${esc(step.system || "Sem sistema")}</strong></div>
+        ${step.type ? `<div class="process-flow-type">${esc(step.type)}</div>` : ""}
+        <p>${esc(step.details || "Sem detalhes.")}</p>
+        ${reference ? `<a href="${esc(reference)}" target="_blank" rel="noopener">Abrir URL ↗</a>` : ""}
+      </article>`;
+    });
+    return `<section class="process-flow-lane">
+      <header class="process-flow-lane-label"><span>Módulo</span><strong>${esc(lane.module)}</strong><span>Submódulo</span><b>${esc(lane.submodule)}</b><span>Grupo</span><b>${esc(lane.group)}</b></header>
+      <div class="process-flow-lane-scroll"><div class="process-flow-track">
+        <div class="process-flow-terminal start"><span>Início</span></div>
+        ${sequence.map((node) => `<div class="process-flow-connector" aria-hidden="true"><span>→</span></div>${node}`).join("")}
+        <div class="process-flow-connector" aria-hidden="true"><span>→</span></div>
+        <div class="process-flow-terminal end"><span>Fim</span></div>
+      </div></div>
+    </section>`;
+  }).join("");
+  const systems = [...new Set(steps.map((step) => step.system).filter(Boolean))];
   const content = `<div class="process-flow-view">
     <div class="process-flow-summary">
-      <div><span>Área</span><strong>${esc(process.area || "Não informada")}</strong></div>
-      <div><span>Sistema</span><strong>${esc(process.system_name || "Não informado")}</strong></div>
+      <div><span>Categoria</span><strong>${esc(process.category || "Não informada")}</strong></div>
+      <div><span>Sistemas</span><strong>${esc(systems.join(", ") || "Não informado")}</strong></div>
       <div><span>Etapas</span><strong>${steps.length}</strong></div>
-      <div><span>Tempo estimado</span><strong>${process.estimated_minutes ? `${esc(process.estimated_minutes)} min` : "Não informado"}</strong></div>
+      <div><span>Linhas</span><strong>${grouped.size}</strong></div>
     </div>
-    ${process.objective ? `<p class="process-flow-objective">${esc(process.objective)}</p>` : ""}
     <div class="process-flow-scroll">
-      <div class="process-flow-track">
-        <div class="process-flow-terminal start"><span>Início</span></div>
-        ${steps.length ? '<div class="process-flow-connector" aria-hidden="true"><span>→</span></div>' : ""}
-        ${sequence.join("")}
-        ${steps.length ? '<div class="process-flow-connector" aria-hidden="true"><span>→</span></div>' : ""}
-        <div class="process-flow-terminal end"><span>Fim</span></div>
-      </div>
+      <div class="process-flow-lanes">${lanes || '<div class="tool-empty">Nenhuma etapa cadastrada.</div>'}</div>
     </div>
   </div><div class="modal-foot"><button class="btn" id="tool-process-flow-close">Fechar</button></div>`;
   const closeFlow = nestedCenterModal(`Fluxo · ${process.title}`, content, { cls: "full process-flow-modal", closeOnOverlay: true });
@@ -6537,29 +6556,35 @@ function openToolProcessFlow(id) {
 
 function processStepEditorHtml(steps) {
   return steps.map((step, index) => `<div class="process-step-editor" data-index="${index}">
-    <div class="process-step-number">${index + 1}</div><div class="process-step-fields"><input class="process-step-title" value="${esc(step.title)}" placeholder="Título da etapa"><textarea class="process-step-instruction" rows="3" placeholder="Explique como executar esta etapa">${esc(step.instruction)}</textarea></div>
+    <div class="process-step-number">${index + 1}</div><div class="process-step-fields">
+      <div class="process-step-grid">
+        <label>Sistema *<input class="process-step-input" data-field="system" value="${esc(step.system)}" placeholder="Ex.: Bling"></label>
+        <label>Módulo *<input class="process-step-input" data-field="module" value="${esc(step.module)}" placeholder="Ex.: Vendas"></label>
+        <label>Submódulo<input class="process-step-input" data-field="submodule" value="${esc(step.submodule)}" placeholder="Ex.: Pedidos de venda"></label>
+        <label>Grupo<input class="process-step-input" data-field="group" value="${esc(step.group)}" placeholder="Ex.: Cadastro"></label>
+        <label>Tipo<input class="process-step-input" data-field="type" value="${esc(step.type)}" placeholder="Ex.: Procedimento"></label>
+        <label>URL<input class="process-step-input" data-field="url" type="url" value="${esc(step.url)}" placeholder="https://..."></label>
+      </div>
+      <label class="process-step-details">Detalhes<textarea class="process-step-input" data-field="details" rows="4" placeholder="Explique como executar esta etapa">${esc(step.details)}</textarea></label>
+    </div>
     <div class="process-step-actions"><button class="tool-icon-btn process-step-up" type="button" title="Subir">↑</button><button class="tool-icon-btn process-step-down" type="button" title="Descer">↓</button><button class="tool-icon-btn process-step-remove" type="button" title="Excluir">×</button></div>
   </div>`).join("");
+}
+
+function emptyProcessStep() {
+  return { id: crypto.randomUUID(), system: "", module: "", submodule: "", group: "", type: "", url: "", details: "" };
 }
 
 function openToolProcessForm(id = null) {
   if (!requireCurrentUserAdmin("Processos")) return;
   const current = toolProcessRows().find((item) => item.id === id) || {};
   let draftSteps = normalizeProcessSteps(current.steps);
-  if (!draftSteps.length) draftSteps = [{ id: crypto.randomUUID(), title: "", instruction: "" }];
+  if (!draftSteps.length) draftSteps = [emptyProcessStep()];
   const content = `<div class="form process-form">
     <div class="field full"><label>Nome do processo *</label><input id="tool-process-title" value="${esc(current.title || "")}" placeholder="Ex.: Criar pedido de venda no Bling"></div>
-    <div class="field"><label>Área</label><input id="tool-process-area" value="${esc(current.area || "")}" placeholder="Ex.: Operações"></div>
-    <div class="field"><label>Sistema</label><input id="tool-process-system" value="${esc(current.system_name || "")}" placeholder="Ex.: Bling"></div>
-    <div class="field full"><label>Objetivo</label><textarea id="tool-process-objective" rows="3" placeholder="O que este processo entrega e quando deve ser usado">${esc(current.objective || "")}</textarea></div>
-    <div class="field"><label>Público</label><input id="tool-process-audience" value="${esc(current.audience || "")}" placeholder="Ex.: Novos analistas"></div>
-    <div class="field"><label>Cargo responsável</label><input id="tool-process-role" value="${esc(current.responsible_job_title || "")}" placeholder="Ex.: Analista de operações"></div>
-    <div class="field"><label>Nível</label><select id="tool-process-difficulty">${Object.entries(PROCESS_DIFFICULTY_LABEL).map(([value, label]) => `<option value="${value}"${(current.difficulty || "basic") === value ? " selected" : ""}>${label}</option>`).join("")}</select></div>
-    <div class="field"><label>Status</label><select id="tool-process-status">${Object.entries(PROCESS_STATUS_LABEL).map(([value, label]) => `<option value="${value}"${(current.status || "draft") === value ? " selected" : ""}>${label}</option>`).join("")}</select></div>
-    <div class="field"><label>Tempo estimado (minutos)</label><input id="tool-process-time" type="number" min="1" max="1440" value="${esc(current.estimated_minutes || "")}"></div>
+    <div class="field"><label>Categoria</label><input id="tool-process-category" value="${esc(current.category || "")}" placeholder="Ex.: Operações"></div>
     <div class="field"><label>Tags</label><input id="tool-process-tags" value="${esc(normalizeTextList(current.tags).join(", "))}" placeholder="Bling, Nota fiscal, Financeiro"></div>
-    <div class="field full"><label>Link de apoio</label><input id="tool-process-reference" type="url" value="${esc(current.reference_url || "")}" placeholder="https://..."></div>
-    <div class="field full"><div class="process-steps-head"><label>Passo a passo *</label><button class="btn" id="tool-process-step-add" type="button">+ Etapa</button></div><div id="tool-process-steps" class="process-steps-editor"></div></div>
+    <div class="field full"><div class="process-steps-head"><label>Etapas *</label><button class="btn" id="tool-process-step-add" type="button">+ Etapa</button></div><div id="tool-process-steps" class="process-steps-editor"></div></div>
   </div><div class="modal-foot"><button class="btn" id="tool-process-cancel">Cancelar</button><button class="btn primary" id="tool-process-save">Salvar</button></div>`;
   const closePanel = document.getElementById("tools-root")
     ? nestedSidePanel(id ? "Editar processo" : "Novo processo", content, { closeOnOverlay: true })
@@ -6567,38 +6592,34 @@ function openToolProcessForm(id = null) {
   const stepsRoot = document.getElementById("tool-process-steps");
   const drawSteps = () => {
     stepsRoot.innerHTML = processStepEditorHtml(draftSteps);
-    stepsRoot.querySelectorAll(".process-step-title,.process-step-instruction").forEach((input) => input.addEventListener("input", () => {
+    stepsRoot.querySelectorAll(".process-step-input").forEach((input) => input.addEventListener("input", () => {
       const index = Number(input.closest(".process-step-editor").dataset.index);
-      draftSteps[index][input.classList.contains("process-step-title") ? "title" : "instruction"] = input.value;
+      draftSteps[index][input.dataset.field] = input.value;
     }));
     stepsRoot.querySelectorAll(".process-step-remove").forEach((button) => button.addEventListener("click", () => { draftSteps.splice(Number(button.closest(".process-step-editor").dataset.index), 1); drawSteps(); }));
     stepsRoot.querySelectorAll(".process-step-up").forEach((button) => button.addEventListener("click", () => { const index = Number(button.closest(".process-step-editor").dataset.index); if (index > 0) { [draftSteps[index - 1], draftSteps[index]] = [draftSteps[index], draftSteps[index - 1]]; drawSteps(); } }));
     stepsRoot.querySelectorAll(".process-step-down").forEach((button) => button.addEventListener("click", () => { const index = Number(button.closest(".process-step-editor").dataset.index); if (index < draftSteps.length - 1) { [draftSteps[index + 1], draftSteps[index]] = [draftSteps[index], draftSteps[index + 1]]; drawSteps(); } }));
   };
   drawSteps();
-  document.getElementById("tool-process-step-add").addEventListener("click", () => { draftSteps.push({ id: crypto.randomUUID(), title: "", instruction: "" }); drawSteps(); stepsRoot.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "nearest" }); });
+  document.getElementById("tool-process-step-add").addEventListener("click", () => { draftSteps.push(emptyProcessStep()); drawSteps(); stepsRoot.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "nearest" }); });
   document.getElementById("tool-process-cancel").addEventListener("click", () => closeToolProcessPanel(closePanel));
   document.getElementById("tool-process-save").addEventListener("click", async () => {
     const title = document.getElementById("tool-process-title").value.trim();
-    const referenceUrl = document.getElementById("tool-process-reference").value.trim();
-    const steps = draftSteps.map((step) => ({ ...step, title: step.title.trim(), instruction: step.instruction.trim() })).filter((step) => step.title || step.instruction);
+    const fields = ["system", "module", "submodule", "group", "type", "url", "details"];
+    const steps = draftSteps.map((step) => ({
+      id: step.id || crypto.randomUUID(),
+      ...Object.fromEntries(fields.map((field) => [field, String(step[field] || "").trim()]))
+    })).filter((step) => fields.some((field) => step[field]));
     if (!title) { toast("Informe o nome do processo.", true); return; }
-    if (referenceUrl && !safeHttpUrl(referenceUrl)) { toast("Informe um link de apoio válido, começando com http:// ou https://.", true); return; }
-    if (!steps.length || steps.some((step) => !step.title)) { toast("Cadastre ao menos uma etapa com título.", true); return; }
+    if (!steps.length) { toast("Cadastre ao menos uma etapa.", true); return; }
+    if (steps.some((step) => !step.system || !step.module)) { toast("Informe Sistema e Módulo em todas as etapas.", true); return; }
+    if (steps.some((step) => step.url && !safeHttpUrl(step.url))) { toast("Revise as URLs das etapas. Use links começando com http:// ou https://.", true); return; }
     const button = document.getElementById("tool-process-save");
     button.disabled = true; button.textContent = "Salvando...";
     const body = {
       title,
-      area: document.getElementById("tool-process-area").value.trim() || null,
-      system_name: document.getElementById("tool-process-system").value.trim() || null,
-      objective: document.getElementById("tool-process-objective").value.trim() || null,
-      audience: document.getElementById("tool-process-audience").value.trim() || null,
-      responsible_job_title: document.getElementById("tool-process-role").value.trim() || null,
-      difficulty: document.getElementById("tool-process-difficulty").value,
-      status: document.getElementById("tool-process-status").value,
-      estimated_minutes: Number(document.getElementById("tool-process-time").value) || null,
+      category: document.getElementById("tool-process-category").value.trim() || null,
       tags: normalizeTextList(document.getElementById("tool-process-tags").value),
-      reference_url: referenceUrl || null,
       steps,
       version: id ? Number(current.version || 1) + 1 : 1,
       updated_at: new Date().toISOString()

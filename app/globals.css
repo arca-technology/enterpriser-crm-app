@@ -573,6 +573,7 @@
   .multi-picker-search{width:100%;height:32px;margin-bottom:6px}
   .multi-picker-options{display:flex;flex-direction:column;max-height:210px;overflow-y:auto}
   .multi-picker-option{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;min-height:34px;padding:7px 9px;border:0;border-radius:4px;background:transparent;color:var(--muted);text-align:left;cursor:pointer}
+  .multi-picker-option[hidden],.single-search-option[hidden],.multi-picker-search-hint[hidden],.single-search-menu[hidden]{display:none!important}
   .multi-picker-option:hover{background:var(--row);color:var(--text)}
   .multi-picker-option span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .multi-picker-option small{margin-left:auto;color:var(--muted2);font-size:9.5px;white-space:nowrap}

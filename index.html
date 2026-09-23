@@ -408,6 +408,25 @@
   .process-step-fields textarea{min-height:72px}
   .process-step-actions{display:flex;flex-direction:column;gap:4px}
   .process-step-actions .tool-icon-btn{width:28px;height:28px}
+  .modal.process-flow-modal{display:flex;flex-direction:column;width:min(1180px,calc(100vw - 40px));max-width:1180px;max-height:84vh;overflow:hidden}
+  .process-flow-view{display:flex;min-height:0;flex:1 1 auto;flex-direction:column;gap:14px;padding:16px 18px;overflow:hidden}
+  .process-flow-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;border:1px solid var(--border);background:var(--border)}
+  .process-flow-summary>div{display:flex;min-width:0;flex-direction:column;gap:4px;padding:10px 12px;background:var(--panel2)}
+  .process-flow-summary span{color:var(--muted);font-size:9.5px;text-transform:uppercase}
+  .process-flow-summary strong{overflow:hidden;color:var(--text);font-size:11.5px;text-overflow:ellipsis;white-space:nowrap}
+  .process-flow-objective{margin:0;color:var(--muted);font-size:11.5px;line-height:1.5}
+  .process-flow-scroll{min-height:0;flex:1 1 auto;overflow:auto;padding:28px 12px}
+  .process-flow-track{display:flex;align-items:stretch;width:max-content;min-width:100%;min-height:210px}
+  .process-flow-node{display:flex;width:250px;min-height:170px;flex:0 0 250px;flex-direction:column;border:1px solid var(--border);border-top:3px solid var(--blue);border-radius:6px;background:var(--panel2)}
+  .process-flow-node-head{display:flex;align-items:center;gap:9px;padding:11px 12px;border-bottom:1px solid var(--border2)}
+  .process-flow-node-head strong{font-size:12px;line-height:1.35}
+  .process-flow-number{display:grid;place-items:center;width:25px;height:25px;flex:0 0 25px;border-radius:50%;background:var(--blue);color:#fff;font-size:10px;font-weight:800}
+  .process-flow-node p{margin:0;padding:12px;color:var(--muted);font-size:11px;line-height:1.55;white-space:pre-wrap}
+  .process-flow-connector{display:flex;width:56px;flex:0 0 56px;align-items:center;justify-content:center}
+  .process-flow-connector::before,.process-flow-connector::after{content:"";height:1px;flex:1;background:var(--cyan)}
+  .process-flow-connector span{color:var(--cyan);font-size:17px;line-height:1}
+  .process-flow-terminal{display:grid;width:76px;height:76px;flex:0 0 76px;align-self:center;place-items:center;border:2px solid var(--cyan);border-radius:50%;background:var(--panel);color:var(--text);font-size:10px;font-weight:800;text-transform:uppercase}
+  .process-flow-terminal.end{border-color:var(--green)}
   .registrations-root .product-activity-list td:first-child strong{color:var(--text)}
   .registrations-product{display:grid;gap:3px}
   .registrations-product small{color:var(--muted);font-size:10.5px}
@@ -692,6 +711,16 @@
     .process-detail{padding:14px 12px}
     .process-step-editor{grid-template-columns:28px minmax(0,1fr)}
     .process-step-actions{grid-column:2;flex-direction:row;justify-content:flex-end}
+    .modal.process-flow-modal{width:100vw;max-width:none;height:100dvh;max-height:none}
+    .process-flow-view{padding:12px;overflow:auto}
+    .process-flow-summary{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .process-flow-scroll{overflow:visible;padding:12px 4px}
+    .process-flow-track{width:100%;min-height:0;flex-direction:column;align-items:stretch}
+    .process-flow-node{width:100%;min-height:0;flex-basis:auto}
+    .process-flow-connector{width:100%;height:46px;flex:0 0 46px;flex-direction:column}
+    .process-flow-connector::before,.process-flow-connector::after{width:1px;height:auto;flex:1}
+    .process-flow-connector span{transform:rotate(90deg)}
+    .process-flow-terminal{align-self:center}
   }
   .form{padding:16px 18px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .form .full{grid-column:1 / -1}

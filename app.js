@@ -4668,6 +4668,28 @@ function nestedSidePanel(title, inner, opts = {}) {
   return closeAction;
 }
 
+function nestedCenterModal(title, inner, opts = {}) {
+  const overlay = document.createElement("div");
+  overlay.className = "overlay nested-modal-layer";
+  overlay.innerHTML = `<div class="modal ${opts.cls || "wide"}">
+      <h3><span>${esc(title)}</span><button class="modal-close-x nested-modal-close" title="Fechar (Esc)">✕</button></h3>
+      ${inner}
+    </div>`;
+  let closed = false;
+  const closeAction = () => {
+    if (closed) return;
+    closed = true;
+    overlay.remove();
+    removeModalLayer(closeAction);
+    if (typeof opts.onClose === "function") opts.onClose();
+  };
+  document.getElementById("modal-root").appendChild(overlay);
+  modalLayerStack.push(closeAction);
+  overlay.querySelector(".nested-modal-close").addEventListener("click", closeAction);
+  if (opts.closeOnOverlay) overlay.addEventListener("click", (event) => { if (event.target === overlay) closeAction(); });
+  return closeAction;
+}
+
 function openForm(tab, id, opts = {}) {
   const c = cache;
   const record = id ? c[tab].find((r) => r[pk(tab)] === id) : null;
@@ -5011,7 +5033,7 @@ function helpContentHtml() {
     <section class="help-section" id="help-tools"><h4>Ferramentas</h4><ul>
       <li><b>Arquivos:</b> catálogo de atalhos para pastas, como links do Google Drive, com nome e descrição. O CRM guarda o link, não copia os arquivos.</li>
       <li><b>E-mails:</b> ao criar uma entrega, o CRM cria automaticamente na HostGator uma conta formada pela raiz do CNPJ em <b>@ecommerce365.com.br</b>. A senha pode ser revelada ou copiada nesta tela.</li>
-      <li><b>Processos:</b> biblioteca de procedimentos para treinamento, com área, sistema, público, responsável, nível, tempo estimado, material de apoio e passo a passo ordenado.</li>
+      <li><b>Processos:</b> biblioteca de procedimentos para treinamento, com área, sistema, público, responsável, nível, tempo estimado, material de apoio e passo a passo ordenado. O botão de fluxo transforma as etapas em um diagrama visual para consulta e apresentação.</li>
       <li>Busca, classificação, filtros e seleção de colunas funcionam nas tabelas de E-mails e Processos.</li>
     </ul><p class="help-note"><b>Segurança:</b> as credenciais de e-mail são compartilhadas entre os usuários ativos do CRM e a senha permanece criptografada no Supabase. Processos podem ser consultados por usuários ativos e alterados apenas por administradores. Os links de Arquivos continuam salvos somente neste navegador.</p></section>
 
@@ -6426,7 +6448,7 @@ function renderToolProcesses(root) {
       if (col.k === "version") return `<td>v${esc(process.version || 1)}</td>`;
       return `<td>${esc(toolProcessValue(process, col.k))}</td>`;
     }).join("")}
-    <td><span class="tool-row-actions"><button class="tool-icon-btn tool-process-open" data-id="${esc(process.id)}" title="Abrir processo">◉</button>${currentUserIsAdmin() ? `<button class="tool-icon-btn tool-process-edit" data-id="${esc(process.id)}" title="Editar processo">✎</button><button class="tool-icon-btn tool-process-delete" data-id="${esc(process.id)}" title="Excluir processo">×</button>` : ""}</span></td>
+    <td><span class="tool-row-actions"><button class="tool-icon-btn tool-process-flow" data-id="${esc(process.id)}" title="Ver fluxo visual">⇢</button><button class="tool-icon-btn tool-process-open" data-id="${esc(process.id)}" title="Abrir processo">◉</button>${currentUserIsAdmin() ? `<button class="tool-icon-btn tool-process-edit" data-id="${esc(process.id)}" title="Editar processo">✎</button><button class="tool-icon-btn tool-process-delete" data-id="${esc(process.id)}" title="Excluir processo">×</button>` : ""}</span></td>
   </tr>`).join("") : `<tr><td colspan="${columns.length + 1}" class="tool-empty">Nenhum processo cadastrado.</td></tr>`;
   const feedback = remoteToolProcessesLoading ? '<div class="tool-empty">Carregando processos...</div>'
     : remoteToolProcessesError ? `<div class="tool-empty">Não foi possível carregar os processos: ${esc(remoteToolProcessesError)}</div>` : "";
@@ -6434,6 +6456,7 @@ function renderToolProcesses(root) {
   wireToolsToolbar(root);
   wireSecondaryTableSelection(root.querySelector("table"), "tools:processes");
   document.getElementById("tool-process-add")?.addEventListener("click", () => openToolProcessForm());
+  root.querySelectorAll(".tool-process-flow").forEach((button) => button.addEventListener("click", () => openToolProcessFlow(button.dataset.id)));
   root.querySelectorAll(".process-open-link,.tool-process-open").forEach((button) => button.addEventListener("click", () => openToolProcess(button.dataset.id)));
   root.querySelectorAll(".tool-process-edit").forEach((button) => button.addEventListener("click", () => openToolProcessForm(button.dataset.id)));
   root.querySelectorAll(".tool-process-delete").forEach((button) => button.addEventListener("click", () => deleteToolProcess(button.dataset.id)));
@@ -6468,12 +6491,48 @@ function openToolProcess(id) {
     ${reference ? `<a class="btn process-reference" href="${esc(reference)}" target="_blank" rel="noopener">Abrir material de apoio ↗</a>` : ""}
     <section><h4>Passo a passo</h4><ol class="process-steps-view">${steps.map((step) => `<li><strong>${esc(step.title)}</strong>${step.instruction ? `<p>${esc(step.instruction)}</p>` : ""}</li>`).join("") || "<li>Nenhuma etapa cadastrada.</li>"}</ol></section>
     ${normalizeTextList(process.tags).length ? `<section><h4>Tags</h4><div class="tool-tags">${normalizeTextList(process.tags).map((tag) => `<span class="tool-tag">${esc(tag)}</span>`).join("")}</div></section>` : ""}
-  </div><div class="modal-foot"><button class="btn" id="tool-process-close">Fechar</button>${currentUserIsAdmin() ? '<button class="btn primary" id="tool-process-detail-edit">Editar</button>' : ""}</div>`;
+  </div><div class="modal-foot"><button class="btn" id="tool-process-close">Fechar</button><button class="btn" id="tool-process-detail-flow">⇢ Fluxo visual</button>${currentUserIsAdmin() ? '<button class="btn primary" id="tool-process-detail-edit">Editar</button>' : ""}</div>`;
   const closePanel = document.getElementById("tools-root")
     ? nestedSidePanel(process.title, content, { closeOnOverlay: true })
     : sidePanel(process.title, content, { closeOnOverlay: true, onClose: () => openToolsModal("processes") });
   document.getElementById("tool-process-close").addEventListener("click", () => closeToolProcessPanel(closePanel));
+  document.getElementById("tool-process-detail-flow").addEventListener("click", () => openToolProcessFlow(id));
   document.getElementById("tool-process-detail-edit")?.addEventListener("click", () => { closePanel(); openToolProcessForm(id); });
+}
+
+function openToolProcessFlow(id) {
+  const process = toolProcessRows().find((item) => item.id === id);
+  if (!process) return;
+  const steps = normalizeProcessSteps(process.steps);
+  const nodes = steps.map((step, index) => `<article class="process-flow-node">
+    <div class="process-flow-node-head"><span class="process-flow-number">${index + 1}</span><strong>${esc(step.title)}</strong></div>
+    <p>${esc(step.instruction || "Sem instrução adicional.")}</p>
+  </article>`);
+  const sequence = [];
+  nodes.forEach((node, index) => {
+    sequence.push(node);
+    if (index < nodes.length - 1) sequence.push('<div class="process-flow-connector" aria-hidden="true"><span>→</span></div>');
+  });
+  const content = `<div class="process-flow-view">
+    <div class="process-flow-summary">
+      <div><span>Área</span><strong>${esc(process.area || "Não informada")}</strong></div>
+      <div><span>Sistema</span><strong>${esc(process.system_name || "Não informado")}</strong></div>
+      <div><span>Etapas</span><strong>${steps.length}</strong></div>
+      <div><span>Tempo estimado</span><strong>${process.estimated_minutes ? `${esc(process.estimated_minutes)} min` : "Não informado"}</strong></div>
+    </div>
+    ${process.objective ? `<p class="process-flow-objective">${esc(process.objective)}</p>` : ""}
+    <div class="process-flow-scroll">
+      <div class="process-flow-track">
+        <div class="process-flow-terminal start"><span>Início</span></div>
+        ${steps.length ? '<div class="process-flow-connector" aria-hidden="true"><span>→</span></div>' : ""}
+        ${sequence.join("")}
+        ${steps.length ? '<div class="process-flow-connector" aria-hidden="true"><span>→</span></div>' : ""}
+        <div class="process-flow-terminal end"><span>Fim</span></div>
+      </div>
+    </div>
+  </div><div class="modal-foot"><button class="btn" id="tool-process-flow-close">Fechar</button></div>`;
+  const closeFlow = nestedCenterModal(`Fluxo · ${process.title}`, content, { cls: "wide process-flow-modal", closeOnOverlay: true });
+  document.getElementById("tool-process-flow-close").addEventListener("click", closeFlow);
 }
 
 function processStepEditorHtml(steps) {

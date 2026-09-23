@@ -4670,7 +4670,7 @@ function nestedSidePanel(title, inner, opts = {}) {
 
 function nestedCenterModal(title, inner, opts = {}) {
   const overlay = document.createElement("div");
-  overlay.className = "overlay nested-modal-layer";
+  overlay.className = `overlay${opts.cls?.split(/\s+/).includes("full") ? " full-overlay" : ""} nested-modal-layer`;
   overlay.innerHTML = `<div class="modal ${opts.cls || "wide"}">
       <h3><span>${esc(title)}</span><button class="modal-close-x nested-modal-close" title="Fechar (Esc)">✕</button></h3>
       ${inner}
@@ -6531,7 +6531,7 @@ function openToolProcessFlow(id) {
       </div>
     </div>
   </div><div class="modal-foot"><button class="btn" id="tool-process-flow-close">Fechar</button></div>`;
-  const closeFlow = nestedCenterModal(`Fluxo · ${process.title}`, content, { cls: "wide process-flow-modal", closeOnOverlay: true });
+  const closeFlow = nestedCenterModal(`Fluxo · ${process.title}`, content, { cls: "full process-flow-modal", closeOnOverlay: true });
   document.getElementById("tool-process-flow-close").addEventListener("click", closeFlow);
 }
 

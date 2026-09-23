@@ -592,6 +592,75 @@
     .help-columns{grid-template-columns:1fr}
     .help-intro{align-items:flex-start;flex-direction:column;gap:2px}
   }
+  @media(max-width:767px){
+    body{font-size:12px;overflow:hidden}
+    header{height:94px;flex:0 0 94px;display:flex;flex-wrap:wrap;align-content:flex-start;gap:0;padding:0 8px}
+    .brand-home{height:48px;display:flex;align-items:center;flex:1 1 auto;font-size:12px}
+    header .actions{height:48px;flex:0 0 auto;gap:0}
+    header .actions .ico{width:40px;height:40px;padding:9px}
+    header .actions [data-action="notifications"],header .actions [data-action="integrations"],header .actions [data-action="settings"]{display:none}
+    header nav{order:3;position:static;transform:none;width:calc(100vw - 16px);height:45px;margin:0;justify-content:flex-start;gap:5px;overflow-x:auto;scrollbar-width:none}
+    header nav::-webkit-scrollbar{display:none}
+    header .tab{min-width:auto;height:34px;padding:0 14px;font-size:10.5px}
+
+    .subbar{height:48px;flex:0 0 48px;grid-template-columns:auto minmax(0,1fr);gap:8px;padding:6px 8px}
+    .sb-left{grid-column:1}.sb-center{grid-column:2}.sb-right{display:none}
+    .count{max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:4px 7px}
+    .search{width:100%;max-width:none;height:36px;font-size:13px}
+    #new,.selection-actions,.select-head,.select-cell,.action-col{display:none!important}
+    .filter-strip{height:24px;min-height:24px;flex-basis:24px;padding-left:8px;padding-right:8px}
+    .filter-badge{height:19px;max-width:170px}
+
+    main{overflow:hidden}
+    .data-table-wrap{min-height:0}
+    .table-scroll{overflow:auto}
+    .data-table{width:100%;table-layout:fixed}
+    .data-table th[data-k],.data-table td[data-k]{display:none}
+    .data-table th,.data-table td{height:42px;padding:7px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .data-table th{font-size:9.5px}
+    .data-table td{font-size:11px}
+    .data-table [data-k="name"],.data-table [data-k="legal_name"],.data-table [data-k="trade_name"],.data-table [data-k="contact_name"],.data-table [data-k="title"]{font-weight:700}
+    .data-table[data-tab="contacts"] [data-k="name"],.data-table[data-tab="contacts"] [data-k="phone"],.data-table[data-tab="contacts"] [data-k="company_id"],
+    .data-table[data-tab="companies"] [data-k="trade_name"],.data-table[data-tab="companies"] [data-k="phone"],.data-table[data-tab="companies"] [data-k="registration_status"],
+    .data-table[data-tab="conversations"] [data-k="contact_name"],.data-table[data-tab="conversations"] [data-k="source"],.data-table[data-tab="conversations"] [data-k="last_at"],
+    .data-table[data-tab="deals"] [data-k="title"],.data-table[data-tab="deals"] [data-k="status"],.data-table[data-tab="deals"] [data-k="amount"],
+    .data-table[data-tab="projects"] [data-k="name"],.data-table[data-tab="projects"] [data-k="client_name"],.data-table[data-tab="projects"] [data-k="status"],
+    .data-table[data-tab="activities"] [data-k="title"],.data-table[data-tab="activities"] [data-k="due_date"],.data-table[data-tab="activities"] [data-k="status"]{display:table-cell}
+    .data-table th[data-k]:first-of-type,.data-table td[data-k]:first-of-type{width:46%}
+    .data-table .sticky-col{position:static;width:auto;min-width:0;max-width:none;box-shadow:none}
+    .inline-due-date{min-width:0;width:100%;padding:0;border:0;background:transparent;pointer-events:none}
+    .table-pagination{height:38px;min-height:38px;flex-basis:38px;padding:4px 8px;font-size:10px}
+    .table-pagination .btn{width:32px;height:30px}
+
+    .home{padding:10px;gap:10px}
+    .home-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+    .metric{min-width:0;padding:11px}.metric .v{font-size:18px;margin-top:5px}.metric .k{font-size:9.5px}
+    .home-grid{grid-template-columns:1fr;gap:10px}
+    .home-panel{min-width:0}
+    .home-panel h3{padding:10px 11px}
+    .home-panel .task-table-wrap table{width:100%;table-layout:fixed}
+    .home-panel .task-table-wrap th:nth-child(2),.home-panel .task-table-wrap td:nth-child(2),
+    .home-panel .task-table-wrap th:nth-child(3),.home-panel .task-table-wrap td:nth-child(3),
+    .home-panel .task-table-wrap th:nth-child(6),.home-panel .task-table-wrap td:nth-child(6){display:none}
+    .home-panel .task-table-wrap th,.home-panel .task-table-wrap td{padding:7px 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+    footer{height:38px;flex:0 0 38px;justify-content:center;padding:0 8px}
+    .foot-left,footer [data-action="log"],footer [data-action="registrations"],footer [data-action="tools"],footer [data-action="updates"]{display:none!important}
+    .foot-right{width:100%;justify-content:center}
+    .foot-btn{min-width:108px;height:30px}
+
+    .overlay{padding:0}
+    .modal,.modal.wide,.modal.side-panel{width:100vw;max-width:none;height:100dvh;max-height:none;border:0;border-radius:0}
+    .modal.side-panel{overflow-y:auto}
+    .modal h3{height:48px;min-height:48px}
+    .form,.modal.side-panel .form{grid-template-columns:1fr;padding:14px 12px;gap:11px}
+    .form .field{grid-column:1}
+    .modal-foot{padding:10px 12px}
+    .modal-foot .btn{min-height:40px}
+    .modal-header-add,.activity-form-drawer .modal-foot .primary,.task-create,.registration-cols-btn,.project-cols-btn,.tools-cols-btn{display:none!important}
+    .rowbtn.edit,.rowbtn.del,.rowbtn.del-import,.rowbtn.convert,.reg-template-clone,.reg-template-edit,.reg-product-edit,.reg-user-edit,.tool-email-edit,.tool-email-delete{display:none!important}
+    .activity-form-drawer{width:100vw;max-width:none}
+  }
   .form{padding:16px 18px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .form .full{grid-column:1 / -1}
   .field{display:flex;flex-direction:column;gap:5px}
@@ -636,5 +705,10 @@
   .toast{background:var(--panel);border:1px solid var(--border);color:var(--text);
     padding:10px 16px;border-radius:8px;font-size:12.5px;box-shadow:0 6px 20px rgba(0,0,0,.3)}
   .toast.err{border-color:var(--red)}
+  @media(max-width:767px){
+    .form,.modal.side-panel .form{grid-template-columns:1fr;padding:14px 12px;gap:11px}
+    .form .field{grid-column:1}
+    .modal-foot{padding:10px 12px}
+  }
 
 #legacy-root { display: contents; }

@@ -1553,7 +1553,7 @@ function renderTable(c) {
     const tds = cols.map((col) => {
       const val = col.fmt ? col.fmt(r[col.k], r, c) : esc(r[col.k] ?? "—");
       const cls = [col.num ? "num" : "", col.cls || ""].filter(Boolean).join(" ");
-      return `<td class="${cls}">${val}</td>`;
+      return `<td class="${cls}" data-k="${esc(col.k)}">${val}</td>`;
     }).join("");
     if (state.tab === "conversations") {
       return `<tr>${selectTd}${tds}<td class="act action-col">
@@ -1584,7 +1584,7 @@ function renderTable(c) {
   </div>` : "";
   const emptyColspan = cols.length + (selectable ? 1 : 0) + (state.tab === "activities" ? 0 : 1);
   const tableBody = body || `<tr><td colspan="${emptyColspan}" class="empty">Nenhum registro. Clique em <b>+</b> para criar.</td></tr>`;
-  document.getElementById("main").innerHTML = `<div class="data-table-wrap"><div class="table-scroll"><table class="data-table"><thead><tr>${head}</tr></thead><tbody>${tableBody}</tbody></table></div>${pagination}</div>`;
+  document.getElementById("main").innerHTML = `<div class="data-table-wrap"><div class="table-scroll"><table class="data-table" data-tab="${esc(state.tab)}"><thead><tr>${head}</tr></thead><tbody>${tableBody}</tbody></table></div>${pagination}</div>`;
 
   document.querySelectorAll("thead th[data-k]").forEach((th) =>
     th.addEventListener("click", (e) => {

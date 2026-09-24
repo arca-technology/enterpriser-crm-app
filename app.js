@@ -325,7 +325,9 @@ async function api(path, opts = {}) {
     }
     throw new Error(`${res.status} ${res.statusText}${txt ? " · " + txt.slice(0, 120) : ""}`);
   }
-  return res.status === 204 ? null : res.json();
+  if (res.status === 204) return null;
+  const text = await res.text();
+  return text.trim() ? JSON.parse(text) : null;
 }
 
 async function fetchTable(name) {
@@ -4997,6 +4999,8 @@ async function replaceContactCompanyLinks({ contactId = null, companyId = null, 
 async function saveForm(tab, id, fs, opts = {}) {
   const body = {};
   const form = document.querySelector("#modal-root .form");
+  const saveButton = document.getElementById("save");
+  if (saveButton?.disabled) return;
   for (const f of fs) {
     if (f.type === "multi") {
       body[f.k] = multiPickerValues(`form-${f.k}`);
@@ -5024,17 +5028,37 @@ async function saveForm(tab, id, fs, opts = {}) {
     if (body.phone) body.phone = normalizePhoneList(body.phone);
     if (body.email) body.email = normalizeEmailList(body.email);
   }
+  let effectiveId = id || form?.dataset.savedId || null;
+  if (tab === "contacts" && !effectiveId) {
+    const name = String(body.name || "").trim().toLocaleLowerCase("pt-BR");
+    const phone = String(body.phone || "").replace(/\D/g, "");
+    const emails = normalizeEmailList(body.email || "").toLocaleLowerCase("pt-BR").split(/[;,]/).map((value) => value.trim()).filter(Boolean);
+    const existing = (cache.contacts || []).find((contact) => {
+      if (String(contact.name || "").trim().toLocaleLowerCase("pt-BR") !== name) return false;
+      const samePhone = phone && String(contact.phone || "").replace(/\D/g, "").includes(phone);
+      const contactEmails = normalizeEmailList(contact.email || "").toLocaleLowerCase("pt-BR").split(/[;,]/).map((value) => value.trim()).filter(Boolean);
+      const sameEmail = emails.length && emails.some((email) => contactEmails.includes(email));
+      return samePhone || sameEmail;
+    });
+    if (existing) effectiveId = existing.id;
+  }
+  const originalSaveLabel = saveButton?.textContent || "Salvar";
+  if (saveButton) { saveButton.disabled = true; saveButton.textContent = "Salvando..."; }
   try {
     let saved;
-    if (id) { saved = await updateRow(tab, id, body); toast("Atualizado."); }
-    else { saved = await createRow(tab, body); toast("Criado."); }
+    if (effectiveId) { saved = await updateRow(tab, effectiveId, body); toast(id ? "Atualizado." : "Pessoa existente atualizada."); }
+    else {
+      saved = await createRow(tab, body);
+      if (form && saved?.id) form.dataset.savedId = saved.id;
+      toast("Criado.");
+    }
     if (tab === "contacts") await replaceContactCompanyLinks({ contactId: saved.id, relatedIds: linkedCompanyIds });
     if (tab === "companies") await replaceContactCompanyLinks({ companyId: saved.tax_id, relatedIds: linkedContactIds });
     if (tab === "deals" && body.status === "won") {
-      const dealId = id || saved?.id;
+      const dealId = effectiveId || saved?.id;
       if (dealId) await createProjectFromDeal({ id: dealId, company_id: body.company_id, contact_id: body.contact_id, product_id: body.product_id, title: body.title });
     }
-    const deliveryForEmail = tab === "projects" && !id && saved?.id ? saved : null;
+    const deliveryForEmail = tab === "projects" && !effectiveId && saved?.id ? saved : null;
     await init();
     if (opts.returnToRegistrations && document.getElementById("registrations-root")) {
       opts.closeAction?.();
@@ -5042,7 +5066,10 @@ async function saveForm(tab, id, fs, opts = {}) {
     } else if (opts.returnToRegistrations) openRegistrationsModal(opts.returnToRegistrations);
     else closeModal();
     if (deliveryForEmail) provisionDeliveryEmail(deliveryForEmail);
-  } catch (err) { toast("Erro ao salvar · " + err.message, true); }
+  } catch (err) {
+    if (saveButton) { saveButton.disabled = false; saveButton.textContent = originalSaveLabel; }
+    toast("Erro ao salvar · " + err.message, true);
+  }
 }
 
 function confirmDelete(tab, id) {

@@ -1112,7 +1112,14 @@ async function loadAll() {
 
 // ---------- Utils ----------
 const brl = (n) => (n == null || n === "" ? "—" : new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(n));
-const dt = (s) => (s ? new Date(s).toLocaleDateString("pt-BR") : "—");
+const dt = (value) => {
+  if (!value) return "—";
+  const raw = String(value);
+  const date = /^\d{4}-\d{2}-\d{2}/.test(raw)
+    ? new Date(`${raw.slice(0, 10)}T12:00:00`)
+    : new Date(raw);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleDateString("pt-BR");
+};
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 function safeHttpUrl(value) {
   try {
@@ -1781,17 +1788,106 @@ function isoDay(date) {
 function timelineItem(tab, row, c) {
   if (tab === "deals") return {
     id: row.id, title: row.title, detail: c.companyById[row.company_id]?.legal_name || c.companyById[row.company_id]?.name || "Sem empresa",
-    start: row.expected_close_date, end: row.expected_close_date
+    start: row.expected_close_date, end: row.expected_close_date, status: row.status
   };
   if (tab === "projects") return {
     id: row.id, title: c.productById[row.product_id]?.name || row.name || "Entrega",
-    detail: c.companyById[row.company_id]?.legal_name || "Sem cliente", start: row.start_date, end: row.end_date || row.start_date
+    detail: c.companyById[row.company_id]?.legal_name || "Sem cliente", start: row.start_date, end: row.end_date || row.start_date, status: row.status
   };
   if (tab === "activities") return {
     id: row.id, title: activityDisplayName(row), detail: `${row.client_name || "Sem cliente"} · ${row.product_name || "Sem produto"}`,
-    start: row.due_date, end: row.due_date
+    start: row.due_date, end: row.due_date, status: row.status
   };
   return null;
+}
+
+const GANTT_DAY_MS = 86400000;
+
+function ganttScale(items) {
+  const starts = items.map((item) => dateOnly(item.start).getTime());
+  const ends = items.map((item) => (dateOnly(item.end) || dateOnly(item.start)).getTime());
+  const dataStart = new Date(Math.min(...starts));
+  const dataEnd = new Date(Math.max(...ends));
+  const dataDays = Math.max(1, Math.round((dataEnd - dataStart) / GANTT_DAY_MS) + 1);
+  let start;
+  let end;
+  let cellWidth;
+  const ticks = [];
+
+  if (dataDays <= 45) {
+    cellWidth = 42;
+    start = new Date(dataStart);
+    start.setDate(start.getDate() - 1);
+    end = new Date(dataEnd);
+    end.setDate(end.getDate() + 2);
+    for (let cursor = new Date(start); cursor < end; cursor.setDate(cursor.getDate() + 1)) {
+      ticks.push(cursor.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }));
+    }
+  } else if (dataDays <= 180) {
+    cellWidth = 112;
+    start = new Date(dataStart);
+    start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+    end = new Date(dataEnd);
+    end.setDate(end.getDate() + (7 - ((end.getDay() + 6) % 7)));
+    for (let cursor = new Date(start); cursor < end; cursor.setDate(cursor.getDate() + 7)) {
+      ticks.push(`SEM ${cursor.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}`);
+    }
+  } else {
+    cellWidth = 128;
+    start = new Date(dataStart.getFullYear(), dataStart.getMonth(), 1, 12);
+    end = new Date(dataEnd.getFullYear(), dataEnd.getMonth() + 1, 1, 12);
+    for (let cursor = new Date(start); cursor < end; cursor.setMonth(cursor.getMonth() + 1)) {
+      ticks.push(cursor.toLocaleDateString("pt-BR", { month: "short", year: "numeric" }).replace(".", ""));
+    }
+  }
+
+  const width = Math.max(640, ticks.length * cellWidth);
+  return {
+    start,
+    end,
+    ticks,
+    width,
+    span: Math.max(GANTT_DAY_MS, end.getTime() - start.getTime())
+  };
+}
+
+function ganttItemState(item) {
+  if (["done", "won"].includes(item.status)) return "done";
+  const end = dateOnly(item.end || item.start);
+  if (end && end < dateOnly(isoDay(new Date()))) return "overdue";
+  if (["in_progress", "doing", "negotiation"].includes(item.status)) return "active";
+  return "planned";
+}
+
+function ganttTimelineMarkup(items, label = "Registro", itemClass = "") {
+  const scale = ganttScale(items);
+  const grid = `<div class="gantt-grid" style="grid-template-columns:repeat(${scale.ticks.length},1fr)">${scale.ticks.map(() => "<span></span>").join("")}</div>`;
+  const axis = `<div class="gantt-axis" style="width:${scale.width}px;grid-template-columns:repeat(${scale.ticks.length},1fr)">${scale.ticks.map((tick) => `<span>${esc(tick)}</span>`).join("")}</div>`;
+  const today = dateOnly(isoDay(new Date()));
+  const todayLeft = today >= scale.start && today < scale.end
+    ? (today.getTime() - scale.start.getTime()) / scale.span * scale.width
+    : null;
+  const todayLine = todayLeft == null ? "" : `<span class="gantt-today" style="left:${todayLeft}px" title="Hoje"></span>`;
+  const rows = items.sort((a, b) => dateOnly(a.start) - dateOnly(b.start)).map((item) => {
+    const start = dateOnly(item.start);
+    const end = dateOnly(item.end) || start;
+    const isMilestone = isoDay(start) === isoDay(end);
+    const left = Math.max(0, (start.getTime() - scale.start.getTime()) / scale.span * scale.width);
+    const endExclusive = Math.min(scale.end.getTime(), end.getTime() + GANTT_DAY_MS);
+    const width = Math.max(18, (endExclusive - start.getTime()) / scale.span * scale.width);
+    const period = isMilestone ? dt(item.start) : `${dt(item.start)} a ${dt(item.end)}`;
+    const stateClass = ganttItemState(item);
+    const title = esc(`${item.title} · ${period}`);
+    const control = isMilestone
+      ? `<button class="gantt-milestone ${stateClass} ${itemClass}" data-id="${esc(item.id)}" style="left:${left}px" title="${title}"><span></span></button>`
+      : `<button class="gantt-bar ${stateClass} ${itemClass}" data-id="${esc(item.id)}" style="left:${left}px;width:${width}px" title="${title}">${esc(item.title)}</button>`;
+    return `<div class="gantt-row"><div class="gantt-label"><strong>${esc(item.title)}</strong><small>${esc(item.detail)}</small><span>${esc(period)}</span></div>
+      <div class="gantt-track" style="width:${scale.width}px">${grid}${todayLine}${control}</div></div>`;
+  }).join("");
+  return `<div class="gantt-view"><div class="gantt-board">
+    <div class="gantt-head"><div>${esc(label)}</div><div class="gantt-axis-wrap">${axis}</div></div>${rows}
+    <div class="gantt-legend"><span><i class="planned"></i>Planejado</span><span><i class="active"></i>Em andamento</span><span><i class="done"></i>Concluído</span><span><i class="overdue"></i>Atrasado</span><span class="gantt-legend-note">◆ data única</span></div>
+  </div></div>`;
 }
 
 function openTimelineRecord(tab, id) {
@@ -1848,23 +1944,8 @@ function renderGantt(c) {
     document.getElementById("main").innerHTML = '<div class="empty">Nenhum registro com data para exibir no Gantt.</div>';
     return;
   }
-  const starts = items.map((item) => dateOnly(item.start).getTime());
-  const ends = items.map((item) => (dateOnly(item.end) || dateOnly(item.start)).getTime());
-  const min = Math.min(...starts);
-  const max = Math.max(...ends, min + 86400000);
-  const span = Math.max(86400000, max - min);
-  const rows = items.sort((a, b) => dateOnly(a.start) - dateOnly(b.start)).map((item) => {
-    const start = dateOnly(item.start).getTime();
-    const end = (dateOnly(item.end) || dateOnly(item.start)).getTime();
-    const left = Math.max(0, (start - min) / span * 100);
-    const width = Math.max(1.5, (Math.max(end, start + 86400000) - start) / span * 100);
-    return `<div class="gantt-row"><div class="gantt-label"><strong>${esc(item.title)}</strong><small>${esc(item.detail)}</small></div>
-      <div class="gantt-track"><button class="gantt-bar" data-id="${esc(item.id)}" style="left:${left}%;width:${Math.min(width, 100 - left)}%" title="${esc(dt(item.start))} a ${esc(dt(item.end || item.start))}">${esc(item.title)}</button></div></div>`;
-  }).join("");
-  document.getElementById("main").innerHTML = `<div class="gantt-view"><div class="gantt-board">
-    <div class="gantt-head"><div>Registro</div><div>${esc(dt(isoDay(new Date(min))))} a ${esc(dt(isoDay(new Date(max))))}</div></div>${rows}
-  </div></div>`;
-  document.querySelectorAll(".gantt-bar").forEach((button) =>
+  document.getElementById("main").innerHTML = ganttTimelineMarkup(items);
+  document.querySelectorAll(".gantt-bar,.gantt-milestone").forEach((button) =>
     button.addEventListener("click", () => openTimelineRecord(state.tab, button.dataset.id)));
 }
 
@@ -3112,18 +3193,16 @@ function renderProjectTaskCalendar(tasks) {
 }
 
 function renderProjectTaskGantt(tasks) {
-  const items = tasks.filter((task) => dateOnly(task.due_date));
+  const items = tasks.filter((task) => dateOnly(task.due_date)).map((task) => ({
+    id: task.id,
+    title: activityDisplayName(task),
+    detail: TASK_STATUS.find((status) => status.id === task.status)?.label || "A fazer",
+    start: task.due_date,
+    end: task.due_date,
+    status: task.status
+  }));
   if (!items.length) return '<div class="empty">Nenhuma tarefa com prazo para exibir no Gantt.</div>';
-  const dates = items.map((task) => dateOnly(task.due_date).getTime());
-  const min = Math.min(...dates);
-  const max = Math.max(...dates, min + 86400000);
-  const span = Math.max(86400000, max - min);
-  const rows = items.sort((a, b) => dateOnly(a.due_date) - dateOnly(b.due_date)).map((task) => {
-    const left = (dateOnly(task.due_date).getTime() - min) / span * 100;
-    return `<div class="gantt-row"><div class="gantt-label"><strong>${esc(activityDisplayName(task))}</strong><small>${esc(TASK_STATUS.find((status) => status.id === task.status)?.label || "A fazer")}</small></div>
-      <div class="gantt-track"><button class="gantt-bar project-gantt-item" data-id="${esc(task.id)}" style="left:${Math.min(left, 98)}%;width:2%" title="${esc(dt(task.due_date))}">${esc(activityDisplayName(task))}</button></div></div>`;
-  }).join("");
-  return `<div class="gantt-view"><div class="gantt-board"><div class="gantt-head"><div>Tarefa</div><div>${esc(dt(isoDay(new Date(min))))} a ${esc(dt(isoDay(new Date(max))))}</div></div>${rows}</div></div>`;
+  return ganttTimelineMarkup(items, "Tarefa", "project-gantt-item");
 }
 
 function renderDeliveryObjectives(projectId, tasks, sourceRows = null) {

@@ -492,6 +492,7 @@ function activityRemoteBody(task) {
   return {
     id: task.id,
     project_id: task.project_id,
+    parent_activity_id: task.parent_activity_id || null,
     source_template_id: task.source_template_id || null,
     occurrence_index: Number(task.occurrence_index || 0),
     depends_on_activity_id: task.depends_on_activity_id || null,
@@ -855,9 +856,49 @@ function activityOccurrenceDates(project, recurrence) {
   return dates.length ? dates : [start];
 }
 function projectTasks(projectId) {
-  return loadProjectTasks()
-    .filter((task) => task.project_id === projectId)
-    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || String(a.created_at || "").localeCompare(String(b.created_at || "")));
+  const tasks = loadProjectTasks().filter((task) => task.project_id === projectId);
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const children = new Map();
+  const compare = (a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0)
+    || String(a.created_at || "").localeCompare(String(b.created_at || ""));
+  tasks.forEach((task) => {
+    if (!task.parent_activity_id || !byId.has(task.parent_activity_id)) return;
+    if (!children.has(task.parent_activity_id)) children.set(task.parent_activity_id, []);
+    children.get(task.parent_activity_id).push(task);
+  });
+  const ordered = [];
+  const visited = new Set();
+  const append = (task) => {
+    if (!task || visited.has(task.id)) return;
+    visited.add(task.id);
+    ordered.push(task);
+    (children.get(task.id) || []).sort(compare).forEach(append);
+  };
+  tasks.filter((task) => !task.parent_activity_id || !byId.has(task.parent_activity_id)).sort(compare).forEach(append);
+  tasks.sort(compare).forEach(append);
+  return ordered;
+}
+
+function taskSubtasks(taskId, tasks = loadProjectTasks()) {
+  return tasks.filter((task) => task.parent_activity_id === taskId);
+}
+
+function taskParent(task, tasks = loadProjectTasks()) {
+  return task?.parent_activity_id ? tasks.find((item) => item.id === task.parent_activity_id) || null : null;
+}
+
+function taskSubtaskProgress(taskId, tasks = loadProjectTasks()) {
+  const subtasks = taskSubtasks(taskId, tasks);
+  return { total: subtasks.length, done: subtasks.filter((task) => task.status === "done").length };
+}
+
+function taskDescendantIds(taskId, tasks = loadProjectTasks(), ids = new Set()) {
+  taskSubtasks(taskId, tasks).forEach((task) => {
+    if (ids.has(task.id)) return;
+    ids.add(task.id);
+    taskDescendantIds(task.id, tasks, ids);
+  });
+  return ids;
 }
 function findConversation(id) {
   return loadConversations().find((row) => row.id === id);
@@ -1309,8 +1350,8 @@ function columns(tab, c) {
     case "activities": return [
       { k: "client_name", h: "CLIENTE", cls: "sticky-col sticky-col-1", thCls: "sticky-col sticky-col-1" },
       { k: "product_name", h: "PRODUTO", cls: "sticky-col sticky-col-2", thCls: "sticky-col sticky-col-2" },
-      { k: "activity_origin", h: "ORIGEM", fmt: (v) => badge(v === "product" ? "qualification" : "proposal", v === "product" ? "Produto" : "Dia a dia") },
-      { k: "title", h: "TAREFA", fmt: (_v, row) => esc(activityDisplayName(row)) },
+      { k: "activity_origin", h: "ORIGEM", fmt: (v, row) => row.parent_activity_id ? badge("lead", "Subtarefa") : badge(v === "product" ? "qualification" : "proposal", v === "product" ? "Produto" : "Dia a dia") },
+      { k: "title", h: "TAREFA", fmt: (_v, row) => `${row.parent_activity_id ? '<span class="task-subtask-branch">↳</span> ' : ""}${esc(activityDisplayName(row))}` },
       { k: "priority", h: "PRIORIDADE", fmt: (v) => priorityBadge(v) },
       { k: "dependency_ids", h: "DEPENDE DE", fmt: (v, row) => esc(dependencyNames(v, row.depends_on_activity_id, c.activityRecords)) },
       { k: "information", h: "INFORMAÇÃO", cls: "muted" },
@@ -1320,6 +1361,8 @@ function columns(tab, c) {
       { k: "type", h: "TIPO" },
       { k: "recurrence", h: "RECORRÊNCIA", fmt: (v) => RECURRENCE_LABEL[v] || "Única" },
       { k: "checklist", h: "CHECKLIST", fmt: (v, row) => {
+        const subtasks = taskSubtaskProgress(row.id, c.activityRecords);
+        if (subtasks.total) return `<span class="muted">Subtarefas ${subtasks.done}/${subtasks.total}</span>`;
         const progress = checklistProgress(v);
         const complete = progress.total > 0 && progress.done === progress.total;
         return `<button class="btn checklist-open${complete ? " complete" : ""}" data-id="${esc(row.id)}" title="Abrir checklist">${progress.done}/${progress.total}</button>`;
@@ -3063,12 +3106,17 @@ function taskIsBlocked(task, tasks = loadProjectTasks()) {
 }
 
 function taskCardHtml(task) {
+  const allTasks = loadProjectTasks();
   const owners = assigneeNames(task.assignee_ids, task.owner_id);
   const objective = cache.deliveryObjectiveById?.[task.objective_id];
-  const dependencies = taskDependencies(task);
-  const blocked = taskIsBlocked(task);
+  const dependencies = taskDependencies(task, allTasks);
+  const blocked = taskIsBlocked(task, allTasks);
   const checklist = checklistProgress(task.checklist);
-  return `<div class="task-card ${task.status === "done" ? "done" : ""}${blocked ? " blocked" : ""}" data-id="${esc(task.id)}">
+  const parent = taskParent(task, allTasks);
+  const subtasks = taskSubtaskProgress(task.id, allTasks);
+  const terminal = subtasks.total === 0;
+  return `<div class="task-card ${task.status === "done" ? "done" : ""}${blocked ? " blocked" : ""}${parent ? " subtask" : ""}" data-id="${esc(task.id)}">
+    ${parent ? `<div class="task-parent-label">Subtarefa de ${esc(activityDisplayName(parent))}</div>` : ""}
     <input class="task-title-input" value="${esc(activityDisplayName(task))}" placeholder="Título da tarefa"${task.source_template_id ? ' readonly title="Tarefa definida no produto"' : ""}>
     <div>${badge(task.source_template_id ? "qualification" : "proposal", task.source_template_id ? "Produto" : "Dia a dia")} ${priorityBadge(task.priority)}</div>
     ${dependencies.length ? `<div class="task-dependency${blocked ? " blocked" : ""}">${blocked ? "Bloqueada por" : "Liberada após"}: ${esc(dependencyNames(task.dependency_ids, task.depends_on_activity_id))}</div>` : ""}
@@ -3083,9 +3131,12 @@ function taskCardHtml(task) {
       <input class="task-due" type="date" value="${esc(task.due_date || "")}" title="Prazo">
     </div>
     <textarea class="task-notes" placeholder="Notas, checklist ou contexto">${esc(task.notes || "")}</textarea>
-    <button class="btn checklist-open${checklist.total > 0 && checklist.done === checklist.total ? " complete" : ""}" data-id="${esc(task.id)}" type="button">Checklist ${checklist.done}/${checklist.total}</button>
+    ${terminal
+      ? `<button class="btn checklist-open${checklist.total > 0 && checklist.done === checklist.total ? " complete" : ""}" data-id="${esc(task.id)}" type="button">Checklist ${checklist.done}/${checklist.total}</button>`
+      : `<div class="task-subtask-summary">Subtarefas ${subtasks.done}/${subtasks.total} · checklist nas subtarefas</div>`}
     <div class="task-actions">
       <select class="task-status"${blocked ? ' title="Conclua a tarefa anterior para liberar"' : ""}>${taskStatusOptions(task.status || "todo", blocked)}</select>
+      ${parent ? "" : '<button class="rowbtn task-add-subtask" title="Adicionar subtarefa">＋</button>'}
       <button class="rowbtn task-edit" title="Editar tarefa">✎</button>
       ${task.source_template_id ? '<span class="muted">Produto</span>' : '<button class="rowbtn del-task" title="Excluir tarefa">✕</button>'}
     </div>
@@ -3131,6 +3182,7 @@ function renderTaskMatrix(tasks) {
 }
 
 function renderTaskTable(tasks) {
+  const allTasks = loadProjectTasks();
   const totalPages = Math.max(1, Math.ceil(tasks.length / projectBoardState.pageSize));
   projectBoardState.page = Math.min(Math.max(1, projectBoardState.page || 1), totalPages);
   const start = (projectBoardState.page - 1) * projectBoardState.pageSize;
@@ -3138,8 +3190,11 @@ function renderTaskTable(tasks) {
   const rows = pageRows.map((task) => {
     const status = TASK_STATUS.find((s) => s.id === (task.status || "todo"))?.label || "A fazer";
     const checklist = checklistProgress(task.checklist);
-    return `<tr>
-      <td>${esc(activityDisplayName(task))}</td>
+    const parent = taskParent(task, allTasks);
+    const subtasks = taskSubtaskProgress(task.id, allTasks);
+    const terminal = subtasks.total === 0;
+    return `<tr class="${parent ? "task-subtask-row" : "task-root-row"}">
+      <td><span class="task-table-title">${parent ? '<span class="task-subtask-branch">↳</span>' : ""}<span>${esc(activityDisplayName(task))}</span>${parent ? '<small>Subtarefa</small>' : ""}</span></td>
       <td>${badge(task.source_template_id ? "qualification" : "proposal", task.source_template_id ? "Produto" : "Dia a dia")}</td>
       <td>${priorityBadge(task.priority)}</td>
       <td>${esc(dependencyNames(task.dependency_ids, task.depends_on_activity_id, tasks))}</td>
@@ -3148,19 +3203,20 @@ function renderTaskTable(tasks) {
       <td>${esc(task.sector || "—")}</td>
       <td>${esc(task.channel || "—")}</td>
       <td>${esc(task.type || "—")}</td>
-      <td><button class="btn checklist-open${checklist.total > 0 && checklist.done === checklist.total ? " complete" : ""}" data-id="${esc(task.id)}">${checklist.done}/${checklist.total}</button></td>
+      <td>${terminal ? `<button class="btn checklist-open${checklist.total > 0 && checklist.done === checklist.total ? " complete" : ""}" data-id="${esc(task.id)}">${checklist.done}/${checklist.total}</button>` : '<span class="muted">Nas subtarefas</span>'}</td>
+      <td>${parent ? "—" : `${subtasks.done}/${subtasks.total}`}</td>
       <td>${esc(cache.deliveryObjectiveById?.[task.objective_id]?.name || "—")}</td>
       <td>${esc(responsibilityNames(task.assignee_ids, task.owner_id, task.assignee_job_titles))}</td>
       <td>${esc(task.due_date ? dt(task.due_date) : "—")}</td>
       <td>${esc(status)}</td>
       <td class="muted">${esc(task.notes || "—")}</td>
-      <td><button class="rowbtn task-edit" data-id="${esc(task.id)}" title="Editar tarefa">✎</button></td>
+      <td><span class="tool-row-actions">${parent ? "" : `<button class="rowbtn task-add-subtask" data-id="${esc(task.id)}" title="Adicionar subtarefa">＋</button>`}<button class="rowbtn task-edit" data-id="${esc(task.id)}" title="Editar tarefa">✎</button></span></td>
     </tr>`;
   }).join("");
   return `<div class="task-table-shell"><div class="task-table-wrap">
     <table><thead><tr>
-      <th>Tarefa</th><th>Origem</th><th>Prioridade</th><th>Depende de</th><th>Informação</th><th>Grupo</th><th>Setor</th><th>Canal</th><th>Tipo</th><th>Checklist</th><th>Objetivo</th><th>Responsáveis</th><th>Prazo</th><th>Status</th><th>Notas</th><th>Ações</th>
-    </tr></thead><tbody>${rows || '<tr><td colspan="16" class="empty">Sem tarefas.</td></tr>'}</tbody></table>
+      <th>Tarefa</th><th>Origem</th><th>Prioridade</th><th>Depende de</th><th>Informação</th><th>Grupo</th><th>Setor</th><th>Canal</th><th>Tipo</th><th>Checklist</th><th>Subtarefas</th><th>Objetivo</th><th>Responsáveis</th><th>Prazo</th><th>Status</th><th>Notas</th><th>Ações</th>
+    </tr></thead><tbody>${rows || '<tr><td colspan="17" class="empty">Sem tarefas.</td></tr>'}</tbody></table>
   </div><div class="table-pagination"><span>${tasks.length ? `${start + 1}-${Math.min(start + projectBoardState.pageSize, tasks.length)} de ${tasks.length}` : "0 registros"}</span>
     <div><button class="btn" id="project-page-prev"${projectBoardState.page <= 1 ? " disabled" : ""}>‹</button><span>Página ${projectBoardState.page} de ${totalPages}</span><button class="btn" id="project-page-next"${projectBoardState.page >= totalPages ? " disabled" : ""}>›</button></div>
   </div></div>`;
@@ -3356,7 +3412,7 @@ function projectSectionRows(projectId, section = projectBoardState.section) {
 }
 
 const PROJECT_TABLE_LABELS = {
-  activities: ["Tarefa", "Origem", "Prioridade", "Depende de", "Informação", "Grupo", "Setor", "Canal", "Tipo", "Checklist", "Objetivo", "Responsáveis", "Prazo", "Status", "Notas"],
+  activities: ["Tarefa", "Origem", "Prioridade", "Depende de", "Informação", "Grupo", "Setor", "Canal", "Tipo", "Checklist", "Subtarefas", "Objetivo", "Responsáveis", "Prazo", "Status", "Notas"],
   objectives: ["Objetivo", "Critério de conclusão", "Progresso das tarefas", "Depende de", "Responsável", "Prazo", "Status"],
   goals: ["Meta", "Indicador", "Valor atual", "Valor-alvo", "Progresso", "Depende de", "Responsável", "Prazo", "Status"]
 };
@@ -3364,13 +3420,15 @@ const PROJECT_TABLE_LABELS = {
 function projectSectionValues(item, tasks = []) {
   if (projectBoardState.section === "activities") {
     const checklist = checklistProgress(item.checklist);
+    const subtasks = taskSubtaskProgress(item.id, tasks);
     return [
       activityDisplayName(item),
       item.source_template_id ? "Produto" : "Dia a dia",
       PRIORITY_LABEL[item.priority || "normal"] || "Normal",
       dependencyNames(item.dependency_ids, item.depends_on_activity_id, tasks),
       item.information || "—", item.group || "—", item.sector || "—", item.channel || "—", item.type || "—",
-      `${checklist.done}/${checklist.total}`,
+      subtasks.total ? "Nas subtarefas" : `${checklist.done}/${checklist.total}`,
+      item.parent_activity_id ? "—" : `${subtasks.done}/${subtasks.total}`,
       cache.deliveryObjectiveById?.[item.objective_id]?.name || "—",
       responsibilityNames(item.assignee_ids, item.owner_id, item.assignee_job_titles),
       item.due_date ? dt(item.due_date) : "—",
@@ -3610,6 +3668,11 @@ function renderActivityChecklistPanel(taskId) {
   const body = document.getElementById("activity-checklist-body");
   const task = loadProjectTasks().find((item) => item.id === taskId);
   if (!body || !task) return;
+  const subtasks = taskSubtasks(taskId);
+  if (subtasks.length) {
+    body.innerHTML = `<div class="empty" style="padding:28px 8px">Esta tarefa possui subtarefas. O checklist deve ser preenchido em cada subtarefa.</div>`;
+    return;
+  }
   const items = normalizeChecklist(task.checklist);
   const progress = checklistProgress(items);
   body.innerHTML = `<div class="checklist-panel-summary"><span>${progress.done} de ${progress.total} concluído(s)</span><strong>${progress.total ? Math.round(progress.done / progress.total * 100) : 0}%</strong></div>
@@ -3652,6 +3715,10 @@ function renderActivityChecklistPanel(taskId) {
 function openActivityChecklist(taskId) {
   const task = loadProjectTasks().find((item) => item.id === taskId);
   if (!task) return;
+  if (taskSubtasks(taskId).length) {
+    toast("O checklist desta tarefa fica nas subtarefas.", true);
+    return;
+  }
   const fullModal = document.querySelector("#ov .modal.full");
   if (fullModal) {
     document.getElementById("activity-checklist-overlay")?.remove();
@@ -3718,10 +3785,17 @@ function openTaskDeliveryPicker() {
   });
 }
 
-function openDeliveryTaskDrawer(projectId, editId = null) {
+function openDeliveryTaskDrawer(projectId, editId = null, parentTaskId = null) {
   document.getElementById("project-task-drawer-overlay")?.remove();
   const tasks = projectTasks(projectId);
   const current = tasks.find((task) => task.id === editId) || {};
+  const parentId = current.parent_activity_id || parentTaskId || null;
+  const parentTask = parentId ? tasks.find((task) => task.id === parentId) : null;
+  if (parentTask?.parent_activity_id) {
+    toast("Uma subtarefa não pode receber outra subtarefa.", true);
+    return;
+  }
+  const subtasks = editId && !parentId ? taskSubtasks(editId, tasks) : [];
   const objectives = loadDeliveryObjectives().filter((item) => item.project_id === projectId);
   const selectedDependencies = new Set(normalizeIdList(current.dependency_ids, current.depends_on_activity_id));
   const dependencyOptions = tasks.filter((task) => task.id !== editId).map((task) => ({ value: task.id, label: activityDisplayName(task) }));
@@ -3735,10 +3809,10 @@ function openDeliveryTaskDrawer(projectId, editId = null) {
   const overlay = document.createElement("div");
   overlay.id = "project-task-drawer-overlay";
   overlay.className = "activity-form-overlay";
-  overlay.innerHTML = `<aside class="activity-form-drawer"><h3>${editId ? "Editar tarefa" : "Nova tarefa"}<button class="modal-close-x" id="project-task-close" title="Fechar">✕</button></h3>
+  overlay.innerHTML = `<aside class="activity-form-drawer"><h3>${editId ? (parentId ? "Editar subtarefa" : "Editar tarefa") : (parentId ? "Nova subtarefa" : "Nova tarefa")}<button class="modal-close-x" id="project-task-close" title="Fechar">✕</button></h3>
     <div class="form product-activity-form">
-      <div class="field"><label>Origem</label><input value="${current.source_template_id ? "Produto" : "Dia a dia"}" disabled></div>
-      <div class="field"><label>Tarefa *</label><input id="project-task-title" value="${esc(current.title || "")}" placeholder="Nome da tarefa"${current.source_template_id ? " readonly" : ""}></div>
+      <div class="field"><label>Origem</label><input value="${esc(parentTask ? `Subtarefa de ${activityDisplayName(parentTask)}` : current.source_template_id ? "Produto" : "Dia a dia")}" disabled></div>
+      <div class="field"><label>${parentId ? "Subtarefa" : "Tarefa"} *</label><input id="project-task-title" value="${esc(current.title || "")}" placeholder="Nome da ${parentId ? "subtarefa" : "tarefa"}"${current.source_template_id ? " readonly" : ""}></div>
       <div class="field"><label>Informação</label><textarea id="project-task-information" rows="4" placeholder="Instruções ou contexto">${esc(current.information || "")}</textarea></div>
       <div class="field"><label>Grupo</label><input id="project-task-group" value="${esc(current.group || "")}"></div>
       <div class="field"><label>Setor</label><input id="project-task-sector" value="${esc(current.sector || "")}"></div>
@@ -3752,7 +3826,11 @@ function openDeliveryTaskDrawer(projectId, editId = null) {
       <div class="field"><label>Cargos responsáveis</label>${multiPickerHtml("project-task-assignee-job-titles", assigneeJobTitleOptions(), selectedJobTitles, "Selecionar cargos")}</div>
       <div class="field"><label>Prazo</label><input id="project-task-due" type="date" value="${esc(current.due_date || "")}"></div>
       <div class="field"><label>Notas</label><textarea id="project-task-notes" rows="4">${esc(current.notes || "")}</textarea></div>
-    </div><div class="modal-foot"><button class="btn" id="project-task-cancel">Cancelar</button><button class="btn primary" id="project-task-save">${editId ? "Salvar" : "Criar"}</button></div>
+      ${editId && !parentId ? `<div class="field full task-subtasks-editor"><label>Subtarefas</label><div class="task-subtask-list">${subtasks.map((subtask) => {
+        const progress = checklistProgress(subtask.checklist);
+        return `<button class="task-subtask-edit" data-id="${esc(subtask.id)}"><span>${esc(activityDisplayName(subtask))}</span><small>${progress.done}/${progress.total} no checklist</small></button>`;
+      }).join("") || '<span class="muted">Nenhuma subtarefa cadastrada.</span>'}</div></div>` : ""}
+    </div><div class="modal-foot">${editId && !parentId ? '<button class="btn" id="project-task-add-subtask">+ Subtarefa</button>' : ""}<button class="btn" id="project-task-cancel">Cancelar</button><button class="btn primary" id="project-task-save">${editId ? "Salvar" : "Criar"}</button></div>
   </aside>`;
   document.querySelector("#ov .modal.full")?.appendChild(overlay);
   const close = () => overlay.remove();
@@ -3762,6 +3840,10 @@ function openDeliveryTaskDrawer(projectId, editId = null) {
   wireMultiPicker("project-task-dependencies");
   wireMultiPicker("project-task-assignees");
   wireMultiPicker("project-task-assignee-job-titles");
+  document.querySelectorAll(".task-subtask-edit").forEach((button) => button.addEventListener("click", () =>
+    openDeliveryTaskDrawer(projectId, button.dataset.id)));
+  document.getElementById("project-task-add-subtask")?.addEventListener("click", () =>
+    openDeliveryTaskDrawer(projectId, null, editId));
   document.getElementById("project-task-save").addEventListener("click", async () => {
     const title = document.getElementById("project-task-title").value.trim();
     if (!title) { toast("Informe a tarefa.", true); return; }
@@ -3770,8 +3852,12 @@ function openDeliveryTaskDrawer(projectId, editId = null) {
     const assigneeJobTitles = multiPickerValues("project-task-assignee-job-titles");
     if (createsTaskDependencyCycle(tasks, editId, dependencyIds)) { toast("Essa dependência criaria um ciclo entre as tarefas.", true); return; }
     const now = new Date().toISOString();
+    const inheritedChecklist = !editId && parentTask && !taskSubtasks(parentTask.id, tasks).length
+      ? normalizeChecklist(parentTask.checklist)
+      : [];
     const draft = {
       id: editId || crypto.randomUUID(), project_id: projectId, title,
+      parent_activity_id: parentId,
       information: document.getElementById("project-task-information").value.trim(),
       group: document.getElementById("project-task-group").value.trim(),
       sector: document.getElementById("project-task-sector").value.trim(),
@@ -3787,8 +3873,8 @@ function openDeliveryTaskDrawer(projectId, editId = null) {
       assignee_job_titles: assigneeJobTitles,
       due_date: document.getElementById("project-task-due").value || null,
       notes: document.getElementById("project-task-notes").value.trim(),
-      sort_order: editId ? Number(current.sort_order || 0) : Math.max(-1, ...tasks.map((task) => Number(task.sort_order || 0))) + 1,
-      checklist: normalizeChecklist(current.checklist),
+      sort_order: editId ? Number(current.sort_order || 0) : Math.max(-1, ...tasks.filter((task) => (task.parent_activity_id || null) === parentId).map((task) => Number(task.sort_order || 0))) + 1,
+      checklist: parentId ? (editId ? normalizeChecklist(current.checklist) : inheritedChecklist) : (subtasks.length ? [] : normalizeChecklist(current.checklist)),
       status: current.status || "todo",
       created_at: current.created_at || now, updated_at: now
     };
@@ -3800,6 +3886,11 @@ function openDeliveryTaskDrawer(projectId, editId = null) {
       } else {
         const saved = isLive() ? await createRow("activities", draft) : draft;
         allTasks.push(saved);
+        if (parentTask && inheritedChecklist.length) {
+          if (isLive()) await updateRow("activities", parentTask.id, { checklist: [], updated_at: now });
+          const storedParent = allTasks.find((task) => task.id === parentTask.id);
+          if (storedParent) Object.assign(storedParent, { checklist: [], updated_at: now });
+        }
       }
       if (isLive()) cache.activityRecords = allTasks;
       else saveProjectTasks(allTasks);
@@ -3807,7 +3898,7 @@ function openDeliveryTaskDrawer(projectId, editId = null) {
       projectBoardState.page = Math.max(1, Math.ceil(projectTasks(projectId).length / projectBoardState.pageSize));
       close();
       renderProjectBoard(projectId);
-      toast(editId ? "Tarefa atualizada." : "Tarefa criada.");
+      toast(editId ? (parentId ? "Subtarefa atualizada." : "Tarefa atualizada.") : (parentId ? "Subtarefa criada." : "Tarefa criada."));
     } catch (err) { toast("Erro ao salvar tarefa · " + err.message, true); }
   });
   document.getElementById("project-task-title").focus();
@@ -4000,21 +4091,37 @@ function wireProjectBoard(projectId) {
     button.addEventListener("click", () => openActivityChecklist(button.dataset.id)));
   document.querySelectorAll("#project-board-root .checklist-open").forEach((button) =>
     button.addEventListener("click", () => openActivityChecklist(button.dataset.id)));
+  document.querySelectorAll("#project-board-root .task-add-subtask[data-id]").forEach((button) =>
+    button.addEventListener("click", () => openDeliveryTaskDrawer(projectId, null, button.dataset.id)));
   document.querySelectorAll("#project-board-root .task-edit[data-id]").forEach((button) =>
     button.addEventListener("click", () => openDeliveryTaskDrawer(projectId, button.dataset.id)));
   document.querySelectorAll("#project-board-root .task-card").forEach((card) => {
     const id = card.dataset.id;
     const rerender = () => renderProjectBoard(projectId);
     card.querySelector(".task-title-input")?.addEventListener("change", async (e) => updateProjectTask(id, { title: e.target.value.trim() }));
+    card.querySelector(".task-add-subtask")?.addEventListener("click", () => openDeliveryTaskDrawer(projectId, null, id));
     card.querySelector(".task-edit")?.addEventListener("click", () => openDeliveryTaskDrawer(projectId, id));
     card.querySelector(".task-due")?.addEventListener("change", async (e) => updateProjectTask(id, { due_date: e.target.value || null }));
     card.querySelector(".task-notes")?.addEventListener("change", async (e) => updateProjectTask(id, { notes: e.target.value }));
     card.querySelector(".task-status")?.addEventListener("change", async (e) => { await updateProjectTask(id, { status: e.target.value }); rerender(); });
     card.querySelector(".del-task")?.addEventListener("click", async () => {
-      if (!window.confirm("Excluir esta tarefa?")) return;
+      const allTasks = loadProjectTasks();
+      const currentTask = allTasks.find((task) => task.id === id);
+      const descendants = taskDescendantIds(id, allTasks);
+      const childCount = descendants.size;
+      if (!window.confirm(childCount ? `Excluir esta tarefa e ${childCount} subtarefa(s)?` : "Excluir esta tarefa?")) return;
       try {
+        const parent = taskParent(currentTask, allTasks);
+        const siblings = parent ? taskSubtasks(parent.id, allTasks).filter((task) => task.id !== id) : [];
+        if (parent && !siblings.length) {
+          const restoredChecklist = normalizeChecklist(currentTask.checklist);
+          const changes = { checklist: restoredChecklist, updated_at: new Date().toISOString() };
+          if (isLive()) await updateRow("activities", parent.id, changes);
+          Object.assign(parent, changes);
+        }
         if (isLive()) await deleteRow("activities", id);
-        const remaining = loadProjectTasks().filter((task) => task.id !== id);
+        const removedIds = new Set([id, ...descendants]);
+        const remaining = allTasks.filter((task) => !removedIds.has(task.id));
         if (isLive()) cache.activityRecords = remaining;
         else saveProjectTasks(remaining);
         refreshActivityCache();
@@ -6450,7 +6557,7 @@ const TOOL_COLUMN_DEFS = {
   ],
   documents: [
     { k: "title", h: "Título" }, { k: "category", h: "Categoria" },
-    { k: "tags", h: "Tags" }, { k: "updated_at", h: "Atualizado em" }
+    { k: "orientation", h: "Orientação" }, { k: "tags", h: "Tags" }, { k: "updated_at", h: "Atualizado em" }
   ]
 };
 const TOOLS_PAGE_SIZE = 50;
@@ -6905,6 +7012,7 @@ function documentSlideText(slides) {
 
 function toolDocumentValue(documentItem, key) {
   if (key === "tags") return normalizeTextList(documentItem.tags).join(", ");
+  if (key === "orientation") return documentOrientation(documentItem) === "portrait" ? "Retrato" : "Paisagem";
   if (key === "updated_at") return documentItem.updated_at
     ? new Date(documentItem.updated_at).toLocaleString("pt-BR")
     : "—";
@@ -6985,14 +7093,57 @@ function closeToolDocumentPanel(closePanel) {
   else openToolsModal("documents");
 }
 
+function documentOrientation(documentItem) {
+  return documentItem?.orientation === "portrait" ? "portrait" : "landscape";
+}
+
+function openToolDocumentPresentation(documentItem, slides, startIndex = 0) {
+  let activeIndex = Math.max(0, Math.min(startIndex, slides.length - 1));
+  const orientation = documentOrientation(documentItem);
+  const content = `<div class="document-slideshow">
+    <main class="document-slideshow-stage"><article class="document-slide ${orientation}" id="document-slideshow-slide"></article></main>
+    <div class="document-slideshow-controls"><button class="btn" id="document-slideshow-prev" title="Slide anterior">‹</button><span id="document-slideshow-count"></span><button class="btn" id="document-slideshow-next" title="Próximo slide">›</button></div>
+  </div>`;
+  let keyHandler;
+  const baseClose = nestedCenterModal(`Apresentação · ${documentItem.title}`, content, {
+    cls: "full document-slideshow-modal",
+    closeOnOverlay: false,
+    onClose: () => document.removeEventListener("keydown", keyHandler)
+  });
+  const draw = () => {
+    const slide = slides[activeIndex];
+    const stage = document.getElementById("document-slideshow-slide");
+    if (!stage || !slide) return;
+    stage.style.background = slide.background;
+    stage.innerHTML = `<h2>${esc(slide.title)}</h2><div class="document-slide-body">${sanitizeDocumentHtml(slide.html)}</div>`;
+    document.getElementById("document-slideshow-count").textContent = `${activeIndex + 1} / ${slides.length}`;
+    document.getElementById("document-slideshow-prev").disabled = activeIndex === 0;
+    document.getElementById("document-slideshow-next").disabled = activeIndex === slides.length - 1;
+  };
+  const move = (direction) => {
+    activeIndex = Math.max(0, Math.min(slides.length - 1, activeIndex + direction));
+    draw();
+  };
+  document.getElementById("document-slideshow-prev").addEventListener("click", () => move(-1));
+  document.getElementById("document-slideshow-next").addEventListener("click", () => move(1));
+  keyHandler = (event) => {
+    if (event.key === "ArrowLeft") { event.preventDefault(); move(-1); }
+    if (event.key === "ArrowRight" || event.key === " ") { event.preventDefault(); move(1); }
+  };
+  document.addEventListener("keydown", keyHandler);
+  draw();
+  return baseClose;
+}
+
 function openToolDocument(id) {
   const documentItem = toolDocumentRows().find((item) => item.id === id);
   if (!documentItem) return;
   const slides = normalizeDocumentSlides(documentItem.slides, documentItem.content, documentItem.title);
+  const orientation = documentOrientation(documentItem);
   const content = `<div class="document-presentation">
     <aside class="document-slide-list" id="document-viewer-list"></aside>
-    <main class="document-stage-wrap"><div class="document-meta"><div class="process-detail-meta"><span>${esc(documentItem.category || "Sem categoria")}</span><span>${slides.length} slide(s)</span><span>${esc(toolDocumentValue(documentItem, "updated_at"))}</span></div>${normalizeTextList(documentItem.tags).length ? `<div class="tool-tags">${normalizeTextList(documentItem.tags).map((tag) => `<span class="tool-tag">${esc(tag)}</span>`).join("")}</div>` : ""}</div><article class="document-slide" id="document-viewer-slide"></article></main>
-  </div><div class="modal-foot"><button class="btn" id="tool-document-close">Fechar</button>${currentUserIsAdmin() ? '<button class="btn primary" id="tool-document-detail-edit">Editar</button>' : ""}</div>`;
+    <main class="document-stage-wrap"><div class="document-meta ${orientation}"><div class="process-detail-meta"><span>${esc(documentItem.category || "Sem categoria")}</span><span>${orientation === "portrait" ? "Retrato" : "Paisagem"}</span><span>${slides.length} slide(s)</span><span>${esc(toolDocumentValue(documentItem, "updated_at"))}</span></div>${normalizeTextList(documentItem.tags).length ? `<div class="tool-tags">${normalizeTextList(documentItem.tags).map((tag) => `<span class="tool-tag">${esc(tag)}</span>`).join("")}</div>` : ""}</div><article class="document-slide ${orientation}" id="document-viewer-slide"></article></main>
+  </div><div class="modal-foot"><button class="btn" id="tool-document-close">Fechar</button><button class="btn" id="tool-document-present">Apresentar</button>${currentUserIsAdmin() ? '<button class="btn primary" id="tool-document-detail-edit">Editar</button>' : ""}</div>`;
   const closePanel = nestedCenterModal(documentItem.title, content, { cls: "full document-viewer-modal", closeOnOverlay: true });
   let activeIndex = 0;
   const collapsedGroups = new Set();
@@ -7014,6 +7165,7 @@ function openToolDocument(id) {
   };
   draw();
   document.getElementById("tool-document-close").addEventListener("click", closePanel);
+  document.getElementById("tool-document-present").addEventListener("click", () => openToolDocumentPresentation(documentItem, slides, activeIndex));
   document.getElementById("tool-document-detail-edit")?.addEventListener("click", () => { closePanel(); openToolDocumentForm(id); });
 }
 
@@ -7022,11 +7174,13 @@ function openToolDocumentForm(id = null) {
   const current = toolDocumentRows().find((item) => item.id === id) || {};
   let slides = normalizeDocumentSlides(current.slides, current.content, current.title);
   let activeIndex = 0;
+  let orientation = documentOrientation(current);
   const content = `<div class="document-editor">
     <div class="document-editor-info">
       <input id="tool-document-title" value="${esc(current.title || "")}" placeholder="Nome da documentação">
       <input id="tool-document-category" value="${esc(current.category || "")}" placeholder="Categoria">
       <input id="tool-document-tags" value="${esc(normalizeTextList(current.tags).join(", "))}" placeholder="Tags separadas por vírgula">
+      <div class="document-orientation" role="group" aria-label="Orientação do documento"><button class="${orientation === "landscape" ? "active" : ""}" data-orientation="landscape" type="button">Paisagem</button><button class="${orientation === "portrait" ? "active" : ""}" data-orientation="portrait" type="button">Retrato</button></div>
     </div>
     <div class="document-editor-toolbar" role="toolbar" aria-label="Formatação de texto">
       <button class="tool-icon-btn document-format" data-command="bold" title="Negrito"><b>B</b></button>
@@ -7040,7 +7194,7 @@ function openToolDocumentForm(id = null) {
     </div>
     <div class="document-editor-workspace">
       <aside class="document-slide-list"><div id="document-editor-list"></div><div class="document-slide-list-actions"><button class="btn document-add-slide" id="document-add-slide">+ Slide</button><button class="btn document-add-slide" id="document-add-group">+ Grupo</button></div></aside>
-      <main class="document-stage-wrap"><div class="document-slide document-slide-edit" id="document-editor-slide"><input id="document-slide-title" placeholder="Título do slide"><div id="document-slide-body" class="document-slide-body" contenteditable="true" data-placeholder="Digite o conteúdo do slide..."></div></div></main>
+      <main class="document-stage-wrap"><div class="document-slide document-slide-edit ${orientation}" id="document-editor-slide"><input id="document-slide-title" placeholder="Título do slide"><div id="document-slide-body" class="document-slide-body" contenteditable="true" data-placeholder="Digite o conteúdo do slide..."></div></div></main>
     </div>
   </div><div class="modal-foot"><button class="btn danger" id="document-delete-slide">Excluir slide</button><button class="btn" id="tool-document-cancel">Cancelar</button><button class="btn primary" id="tool-document-save">Salvar</button></div>`;
   const closePanel = nestedCenterModal(id ? "Editar documentação" : "Nova documentação", content, { cls: "full document-editor-modal", closeOnOverlay: true });
@@ -7109,6 +7263,13 @@ function openToolDocumentForm(id = null) {
     });
   };
   drawEditor();
+  document.querySelectorAll(".document-orientation button").forEach((button) => button.addEventListener("click", () => {
+    orientation = button.dataset.orientation;
+    document.querySelectorAll(".document-orientation button").forEach((item) => item.classList.toggle("active", item === button));
+    const stage = document.getElementById("document-editor-slide");
+    stage.classList.toggle("landscape", orientation === "landscape");
+    stage.classList.toggle("portrait", orientation === "portrait");
+  }));
   document.getElementById("document-slide-title").addEventListener("input", (event) => {
     slides[activeIndex].title = event.target.value;
     document.querySelector(`#document-editor-list .document-slide-thumb[data-index="${activeIndex}"] b`).textContent = event.target.value || `Slide ${activeIndex + 1}`;
@@ -7164,6 +7325,7 @@ function openToolDocumentForm(id = null) {
       tags: normalizeTextList(document.getElementById("tool-document-tags").value),
       content: contentValue,
       slides,
+      orientation,
       updated_at: new Date().toISOString()
     };
     try {

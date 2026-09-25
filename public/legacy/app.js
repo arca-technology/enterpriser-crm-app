@@ -380,6 +380,7 @@ async function provisionDeliveryEmail(project, { notify = true } = {}) {
   try {
     const result = await emailAccountsRequest("POST", { deliveryId: project.id });
     remoteToolEmailsLoaded = true;
+    remoteToolEmailsLoadedAt = Date.now();
     if (result.account) {
       const index = remoteToolEmails.findIndex((account) => account.id === result.account.id);
       if (index >= 0) remoteToolEmails[index] = result.account;
@@ -6452,19 +6453,62 @@ const TOOL_COLUMN_DEFS = {
     { k: "tags", h: "Tags" }, { k: "updated_at", h: "Atualizado em" }
   ]
 };
+const TOOLS_PAGE_SIZE = 50;
+const TOOLS_CACHE_TTL_MS = 5 * 60 * 1000;
+const TOOLS_CACHE_PREFIX = "crm_tools_cache_v1:";
 let toolsState = { section: "files", search: "", tables: {} };
 let remoteToolEmails = [];
 let remoteToolEmailsLoaded = false;
 let remoteToolEmailsLoading = false;
 let remoteToolEmailsError = "";
+let remoteToolEmailsLoadedAt = 0;
 let remoteToolProcesses = [];
 let remoteToolProcessesLoaded = false;
 let remoteToolProcessesLoading = false;
 let remoteToolProcessesError = "";
+let remoteToolProcessesLoadedAt = 0;
 let remoteToolDocuments = [];
 let remoteToolDocumentsLoaded = false;
 let remoteToolDocumentsLoading = false;
 let remoteToolDocumentsError = "";
+let remoteToolDocumentsLoadedAt = 0;
+const hydratedToolsCache = new Set();
+
+function readToolsSessionCache(section) {
+  try {
+    const cached = JSON.parse(sessionStorage.getItem(`${TOOLS_CACHE_PREFIX}${section}`) || "null");
+    return cached && Array.isArray(cached.rows) ? cached : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveToolsSessionCache(section, rows, loadedAt = Date.now()) {
+  if (!["processes", "documents"].includes(section)) return;
+  try {
+    sessionStorage.setItem(`${TOOLS_CACHE_PREFIX}${section}`, JSON.stringify({ rows, loadedAt }));
+  } catch (e) {}
+}
+
+function hydrateToolsSessionCache(section) {
+  if (hydratedToolsCache.has(section) || !["processes", "documents"].includes(section)) return;
+  hydratedToolsCache.add(section);
+  const cached = readToolsSessionCache(section);
+  if (!cached) return;
+  if (section === "processes") {
+    remoteToolProcesses = cached.rows;
+    remoteToolProcessesLoaded = true;
+    remoteToolProcessesLoadedAt = Number(cached.loadedAt || 0);
+  } else {
+    remoteToolDocuments = cached.rows;
+    remoteToolDocumentsLoaded = true;
+    remoteToolDocumentsLoadedAt = Number(cached.loadedAt || 0);
+  }
+}
+
+function toolsCacheIsStale(loaded, loadedAt) {
+  return !loaded || !loadedAt || Date.now() - loadedAt > TOOLS_CACHE_TTL_MS;
+}
 
 function readToolRows(key) {
   try {
@@ -6506,6 +6550,7 @@ function openToolsModal(section = "files") {
   document.querySelectorAll("[data-tools-tab]").forEach((button) => button.addEventListener("click", () => {
     toolsState.section = button.dataset.toolsTab;
     toolsState.search = "";
+    toolTableState(toolsState.section).page = 1;
     document.querySelectorAll("[data-tools-tab]").forEach((tab) => tab.classList.toggle("active", tab === button));
     renderToolsSection();
   }));
@@ -6518,8 +6563,37 @@ function visibleToolColumns(section = toolsState.section) {
 }
 
 function toolTableState(section = toolsState.section) {
-  if (!toolsState.tables[section]) toolsState.tables[section] = { sortKey: null, sortDir: 1, filters: {} };
+  if (!toolsState.tables[section]) toolsState.tables[section] = { sortKey: null, sortDir: 1, filters: {}, page: 1, pageSize: TOOLS_PAGE_SIZE };
   return toolsState.tables[section];
+}
+
+function paginateToolRows(rows, section = toolsState.section) {
+  const tableState = toolTableState(section);
+  const totalPages = Math.max(1, Math.ceil(rows.length / tableState.pageSize));
+  tableState.page = Math.min(Math.max(1, tableState.page || 1), totalPages);
+  const start = (tableState.page - 1) * tableState.pageSize;
+  return { rows: rows.slice(start, start + tableState.pageSize), totalPages, start };
+}
+
+function toolsPaginationHtml(total, section = toolsState.section) {
+  const tableState = toolTableState(section);
+  const totalPages = Math.max(1, Math.ceil(total / tableState.pageSize));
+  const start = total ? (tableState.page - 1) * tableState.pageSize + 1 : 0;
+  const end = Math.min(tableState.page * tableState.pageSize, total);
+  return `<div class="table-pagination tools-pagination"><span>${total ? `${start}-${end} de ${total}` : "0 registros"}</span>
+    <div><button class="btn tools-page-prev"${tableState.page <= 1 ? " disabled" : ""}>‹</button><span>Página ${tableState.page} de ${totalPages}</span><button class="btn tools-page-next"${tableState.page >= totalPages ? " disabled" : ""}>›</button></div></div>`;
+}
+
+function wireToolsPagination(root, section = toolsState.section) {
+  const tableState = toolTableState(section);
+  root.querySelector(".tools-page-prev")?.addEventListener("click", () => {
+    tableState.page -= 1;
+    renderToolsSection();
+  });
+  root.querySelector(".tools-page-next")?.addEventListener("click", () => {
+    tableState.page += 1;
+    renderToolsSection();
+  });
 }
 
 function toolEmailValue(account, key) {
@@ -6540,6 +6614,7 @@ function wireToolsToolbar(root) {
   const input = root.querySelector(".tools-search");
   input?.addEventListener("input", (event) => {
     toolsState.search = event.target.value;
+    toolTableState().page = 1;
     renderToolsSection();
     const next = document.querySelector("#tools-root .tools-search");
     next?.focus();
@@ -6559,6 +6634,7 @@ function wireToolsToolbar(root) {
 function renderToolsSection() {
   const root = document.getElementById("tools-root");
   if (!root) return;
+  hydrateToolsSessionCache(toolsState.section);
   if (toolsState.section === "emails") renderToolEmails(root);
   else if (toolsState.section === "processes") renderToolProcesses(root);
   else if (toolsState.section === "documents") renderToolDocuments(root);
@@ -6569,8 +6645,9 @@ function renderToolFolders(root) {
   const allFolders = readToolRows(TOOL_FOLDERS_KEY);
   const query = toolsState.search.trim().toLocaleLowerCase("pt-BR");
   const folders = allFolders.filter((folder) => !query || [folder.name, folder.description, folder.url].some((value) => String(value || "").toLocaleLowerCase("pt-BR").includes(query)));
+  const page = paginateToolRows(folders, "files");
   const visible = new Set(visibleToolColumns("files").map((col) => col.k));
-  const cards = folders.length ? folders.map((folder) => `<article class="tool-folder">
+  const cards = page.rows.length ? page.rows.map((folder) => `<article class="tool-folder">
     <div class="tool-folder-icon" aria-hidden="true">📁</div>
     <div class="tool-folder-main">
       ${visible.has("name") ? `<div class="tool-folder-name">${esc(folder.name)}</div>` : ""}
@@ -6583,8 +6660,9 @@ function renderToolFolders(root) {
       <button class="tool-icon-btn tool-folder-delete" data-id="${esc(folder.id)}" title="Excluir pasta">×</button>
     </div>
   </article>`).join("") : '<div class="tool-empty">Nenhuma pasta cadastrada.</div>';
-  root.innerHTML = `${toolsToolbarHtml(folders.length, "Adicionar pasta", "tool-folder-add")}<div class="tool-folder-grid">${cards}</div>`;
+  root.innerHTML = `${toolsToolbarHtml(folders.length, "Adicionar pasta", "tool-folder-add")}<div class="tool-folder-grid">${cards}</div>${toolsPaginationHtml(folders.length, "files")}`;
   wireToolsToolbar(root);
+  wireToolsPagination(root, "files");
   document.getElementById("tool-folder-add").addEventListener("click", () => openToolFolderForm());
   root.querySelectorAll(".tool-folder-open").forEach((button) => button.addEventListener("click", () => openToolFolder(button.dataset.id)));
   root.querySelectorAll(".tool-folder-edit").forEach((button) => button.addEventListener("click", () => openToolFolderForm(button.dataset.id)));
@@ -6670,13 +6748,16 @@ function toolProcessValue(process, key) {
   return String(process[key] || "—");
 }
 
-async function loadRemoteToolProcesses() {
+async function loadRemoteToolProcesses({ force = false } = {}) {
   if (!isLive() || remoteToolProcessesLoading) return;
+  if (!force && !toolsCacheIsStale(remoteToolProcessesLoaded, remoteToolProcessesLoadedAt)) return;
   remoteToolProcessesLoading = true;
   remoteToolProcessesError = "";
   try {
     remoteToolProcesses = await fetchTable("processes");
     remoteToolProcessesLoaded = true;
+    remoteToolProcessesLoadedAt = Date.now();
+    saveToolsSessionCache("processes", remoteToolProcesses, remoteToolProcessesLoadedAt);
   } catch (err) {
     remoteToolProcessesError = err.message;
   } finally {
@@ -6686,16 +6767,32 @@ async function loadRemoteToolProcesses() {
   }
 }
 
-function toolFilterStrip(section, tableState) {
+function toolFilterStrip(section, tableState, { loading = false, error = "" } = {}) {
   const activeFilters = Object.entries(tableState.filters).filter(([, values]) => values?.size);
-  return `<div class="registration-filter-strip"><div class="registration-filter-badges">${activeFilters.map(([key, values]) => {
+  return `<div class="registration-filter-strip tools-filter-strip${loading ? " is-loading" : ""}"><div class="registration-filter-badges">${activeFilters.map(([key, values]) => {
     const label = TOOL_COLUMN_DEFS[section].find((col) => col.k === key)?.h || key;
     return `<button class="registration-filter-badge tool-filter-badge" data-key="${esc(key)}" title="Limpar filtro"><span>${esc(label)}: ${esc([...values].join(", "))}</span><b>×</b></button>`;
-  }).join("")}</div><button class="filter-clear-all tool-filter-clear-all" type="button"${activeFilters.length < 2 ? " hidden" : ""}><span aria-hidden="true">×</span> Limpar tudo</button></div>`;
+  }).join("")}</div>${error ? '<button class="tool-load-retry" type="button">Falha ao atualizar · Tentar novamente</button>' : ""}<button class="filter-clear-all tool-filter-clear-all" type="button"${activeFilters.length < 2 ? " hidden" : ""}><span aria-hidden="true">×</span> Limpar tudo</button>${loading ? '<div class="tools-loading-progress" role="progressbar" aria-label="Atualizando dados"><span></span></div>' : ""}</div>`;
+}
+
+function wireToolsLoadRetry(root, section = toolsState.section) {
+  root.querySelector(".tool-load-retry")?.addEventListener("click", () => {
+    if (section === "emails") {
+      remoteToolEmailsError = "";
+      loadRemoteToolEmails({ force: true });
+    } else if (section === "processes") {
+      remoteToolProcessesError = "";
+      loadRemoteToolProcesses({ force: true });
+    } else if (section === "documents") {
+      remoteToolDocumentsError = "";
+      loadRemoteToolDocuments({ force: true });
+    }
+    renderToolsSection();
+  });
 }
 
 function renderToolProcesses(root) {
-  if (isLive() && !remoteToolProcessesLoaded && !remoteToolProcessesLoading && !remoteToolProcessesError) loadRemoteToolProcesses();
+  if (isLive() && !remoteToolProcessesLoading && !remoteToolProcessesError && toolsCacheIsStale(remoteToolProcessesLoaded, remoteToolProcessesLoadedAt)) loadRemoteToolProcesses();
   const allProcesses = toolProcessRows();
   const query = toolsState.search.trim().toLocaleLowerCase("pt-BR");
   const tableState = toolTableState("processes");
@@ -6714,8 +6811,9 @@ function renderToolProcesses(root) {
       toolProcessValue(b, tableState.sortKey), "pt-BR", { numeric: true, sensitivity: "base" }
     ) * tableState.sortDir);
   }
+  const page = paginateToolRows(processes, "processes");
   const columns = visibleToolColumns("processes");
-  const rows = processes.length ? processes.map((process) => `<tr data-id="${esc(process.id)}">
+  const rows = page.rows.length ? page.rows.map((process) => `<tr data-id="${esc(process.id)}">
     ${columns.map((col) => {
       if (col.k === "title") return `<td><button class="process-open-link" data-id="${esc(process.id)}">${esc(process.title || "—")}</button></td>`;
       if (col.k === "tags") return `<td><span class="tool-tags">${normalizeTextList(process.tags).map((tag) => `<span class="tool-tag">${esc(tag)}</span>`).join("") || '<span class="muted">—</span>'}</span></td>`;
@@ -6724,10 +6822,10 @@ function renderToolProcesses(root) {
     }).join("")}
     <td><span class="tool-row-actions"><button class="tool-icon-btn tool-process-flow" data-id="${esc(process.id)}" title="Ver fluxo visual">⇢</button><button class="tool-icon-btn tool-process-open" data-id="${esc(process.id)}" title="Abrir processo">◉</button>${currentUserIsAdmin() ? `<button class="tool-icon-btn tool-process-edit" data-id="${esc(process.id)}" title="Editar processo">✎</button><button class="tool-icon-btn tool-process-delete" data-id="${esc(process.id)}" title="Excluir processo">×</button>` : ""}</span></td>
   </tr>`).join("") : `<tr><td colspan="${columns.length + 1}" class="tool-empty">Nenhum processo cadastrado.</td></tr>`;
-  const feedback = remoteToolProcessesLoading ? '<div class="tool-empty">Carregando processos...</div>'
-    : remoteToolProcessesError ? `<div class="tool-empty">Não foi possível carregar os processos: ${esc(remoteToolProcessesError)}</div>` : "";
-  root.innerHTML = `${toolsToolbarHtml(processes.length, "Adicionar processo", "tool-process-add", currentUserIsAdmin())}${toolFilterStrip("processes", tableState)}${feedback}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  root.innerHTML = `${toolsToolbarHtml(processes.length, "Adicionar processo", "tool-process-add", currentUserIsAdmin())}${toolFilterStrip("processes", tableState, { loading: remoteToolProcessesLoading, error: remoteToolProcessesError })}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>${toolsPaginationHtml(processes.length, "processes")}`;
   wireToolsToolbar(root);
+  wireToolsPagination(root, "processes");
+  wireToolsLoadRetry(root, "processes");
   wireSecondaryTableSelection(root.querySelector("table"), "tools:processes");
   document.getElementById("tool-process-add")?.addEventListener("click", () => openToolProcessForm());
   root.querySelectorAll(".tool-process-flow").forEach((button) => button.addEventListener("click", () => openToolProcessFlow(button.dataset.id)));
@@ -6813,13 +6911,16 @@ function toolDocumentValue(documentItem, key) {
   return String(documentItem[key] || "—");
 }
 
-async function loadRemoteToolDocuments() {
+async function loadRemoteToolDocuments({ force = false } = {}) {
   if (!isLive() || remoteToolDocumentsLoading) return;
+  if (!force && !toolsCacheIsStale(remoteToolDocumentsLoaded, remoteToolDocumentsLoadedAt)) return;
   remoteToolDocumentsLoading = true;
   remoteToolDocumentsError = "";
   try {
     remoteToolDocuments = await fetchTable("documents");
     remoteToolDocumentsLoaded = true;
+    remoteToolDocumentsLoadedAt = Date.now();
+    saveToolsSessionCache("documents", remoteToolDocuments, remoteToolDocumentsLoadedAt);
   } catch (err) {
     remoteToolDocumentsError = err.message;
   } finally {
@@ -6830,7 +6931,7 @@ async function loadRemoteToolDocuments() {
 }
 
 function renderToolDocuments(root) {
-  if (isLive() && !remoteToolDocumentsLoaded && !remoteToolDocumentsLoading && !remoteToolDocumentsError) loadRemoteToolDocuments();
+  if (isLive() && !remoteToolDocumentsLoading && !remoteToolDocumentsError && toolsCacheIsStale(remoteToolDocumentsLoaded, remoteToolDocumentsLoadedAt)) loadRemoteToolDocuments();
   const allDocuments = toolDocumentRows();
   const query = toolsState.search.trim().toLocaleLowerCase("pt-BR");
   const tableState = toolTableState("documents");
@@ -6846,8 +6947,9 @@ function renderToolDocuments(root) {
       toolDocumentValue(b, tableState.sortKey), "pt-BR", { numeric: true, sensitivity: "base" }
     ) * tableState.sortDir);
   }
+  const page = paginateToolRows(documents, "documents");
   const columns = visibleToolColumns("documents");
-  const rows = documents.length ? documents.map((documentItem) => `<tr data-id="${esc(documentItem.id)}">
+  const rows = page.rows.length ? page.rows.map((documentItem) => `<tr data-id="${esc(documentItem.id)}">
     ${columns.map((col) => {
       if (col.k === "title") return `<td><button class="process-open-link tool-document-open" data-id="${esc(documentItem.id)}">${esc(documentItem.title || "—")}</button></td>`;
       if (col.k === "tags") return `<td><span class="tool-tags">${normalizeTextList(documentItem.tags).map((tag) => `<span class="tool-tag">${esc(tag)}</span>`).join("") || '<span class="muted">—</span>'}</span></td>`;
@@ -6855,10 +6957,10 @@ function renderToolDocuments(root) {
     }).join("")}
     <td><span class="tool-row-actions"><button class="tool-icon-btn tool-document-open" data-id="${esc(documentItem.id)}" title="Abrir documentação">◉</button>${currentUserIsAdmin() ? `<button class="tool-icon-btn tool-document-edit" data-id="${esc(documentItem.id)}" title="Editar documentação">✎</button><button class="tool-icon-btn tool-document-delete" data-id="${esc(documentItem.id)}" title="Excluir documentação">×</button>` : ""}</span></td>
   </tr>`).join("") : `<tr><td colspan="${columns.length + 1}" class="tool-empty">Nenhuma documentação cadastrada.</td></tr>`;
-  const feedback = remoteToolDocumentsLoading ? '<div class="tool-empty">Carregando documentação...</div>'
-    : remoteToolDocumentsError ? `<div class="tool-empty">Não foi possível carregar a documentação: ${esc(remoteToolDocumentsError)}</div>` : "";
-  root.innerHTML = `${toolsToolbarHtml(documents.length, "Adicionar documentação", "tool-document-add", currentUserIsAdmin())}${toolFilterStrip("documents", tableState)}${feedback}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  root.innerHTML = `${toolsToolbarHtml(documents.length, "Adicionar documentação", "tool-document-add", currentUserIsAdmin())}${toolFilterStrip("documents", tableState, { loading: remoteToolDocumentsLoading, error: remoteToolDocumentsError })}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>${toolsPaginationHtml(documents.length, "documents")}`;
   wireToolsToolbar(root);
+  wireToolsPagination(root, "documents");
+  wireToolsLoadRetry(root, "documents");
   wireSecondaryTableSelection(root.querySelector("table"), "tools:documents");
   document.getElementById("tool-document-add")?.addEventListener("click", () => openToolDocumentForm());
   root.querySelectorAll(".tool-document-open").forEach((button) => button.addEventListener("click", () => openToolDocument(button.dataset.id)));
@@ -7070,6 +7172,8 @@ function openToolDocumentForm(id = null) {
         const index = remoteToolDocuments.findIndex((item) => item.id === saved.id);
         if (index >= 0) remoteToolDocuments[index] = saved; else remoteToolDocuments.unshift(saved);
         remoteToolDocumentsLoaded = true;
+        remoteToolDocumentsLoadedAt = Date.now();
+        saveToolsSessionCache("documents", remoteToolDocuments, remoteToolDocumentsLoadedAt);
       }
       toast("Documentação salva.");
       closePanel();
@@ -7087,7 +7191,11 @@ async function deleteToolDocument(id) {
   if (!documentItem || !window.confirm(`Excluir a documentação "${documentItem.title}"?`)) return;
   try {
     await deleteRow("documents", id);
-    if (isLive()) remoteToolDocuments = remoteToolDocuments.filter((item) => item.id !== id);
+    if (isLive()) {
+      remoteToolDocuments = remoteToolDocuments.filter((item) => item.id !== id);
+      remoteToolDocumentsLoadedAt = Date.now();
+      saveToolsSessionCache("documents", remoteToolDocuments, remoteToolDocumentsLoadedAt);
+    }
     toast("Documentação excluída.");
     renderToolsSection();
   } catch (err) {
@@ -7308,6 +7416,8 @@ function openToolProcessForm(id = null) {
         const index = remoteToolProcesses.findIndex((item) => item.id === saved.id);
         if (index >= 0) remoteToolProcesses[index] = saved; else remoteToolProcesses.unshift(saved);
         remoteToolProcessesLoaded = true;
+        remoteToolProcessesLoadedAt = Date.now();
+        saveToolsSessionCache("processes", remoteToolProcesses, remoteToolProcessesLoadedAt);
       }
       toast("Processo salvo.");
       closeToolProcessPanel(closePanel);
@@ -7324,7 +7434,11 @@ async function deleteToolProcess(id) {
   if (!process || !window.confirm(`Excluir o processo "${process.title}"?`)) return;
   try {
     await deleteRow("processes", id);
-    if (isLive()) remoteToolProcesses = remoteToolProcesses.filter((item) => item.id !== id);
+    if (isLive()) {
+      remoteToolProcesses = remoteToolProcesses.filter((item) => item.id !== id);
+      remoteToolProcessesLoadedAt = Date.now();
+      saveToolsSessionCache("processes", remoteToolProcesses, remoteToolProcessesLoadedAt);
+    }
     renderToolsSection();
     toast("Processo excluído.");
   } catch (err) { toast("Erro ao excluir processo · " + err.message, true); }
@@ -7334,14 +7448,16 @@ function toolEmailRows() {
   return APP_VARIANT === "web" && isLive() ? remoteToolEmails : readToolRows(TOOL_EMAILS_KEY);
 }
 
-async function loadRemoteToolEmails() {
+async function loadRemoteToolEmails({ force = false } = {}) {
   if (APP_VARIANT !== "web" || !isLive() || remoteToolEmailsLoading) return;
+  if (!force && !toolsCacheIsStale(remoteToolEmailsLoaded, remoteToolEmailsLoadedAt)) return;
   remoteToolEmailsLoading = true;
   remoteToolEmailsError = "";
   try {
     const result = await emailAccountsRequest();
     remoteToolEmails = Array.isArray(result.accounts) ? result.accounts : [];
     remoteToolEmailsLoaded = true;
+    remoteToolEmailsLoadedAt = Date.now();
   } catch (err) {
     remoteToolEmailsError = err.message;
   } finally {
@@ -7353,7 +7469,7 @@ async function loadRemoteToolEmails() {
 
 function renderToolEmails(root) {
   const usesServer = APP_VARIANT === "web" && isLive();
-  if (usesServer && !remoteToolEmailsLoaded && !remoteToolEmailsLoading && !remoteToolEmailsError) loadRemoteToolEmails();
+  if (usesServer && !remoteToolEmailsLoading && !remoteToolEmailsError && toolsCacheIsStale(remoteToolEmailsLoaded, remoteToolEmailsLoadedAt)) loadRemoteToolEmails();
   const allAccounts = toolEmailRows();
   const query = toolsState.search.trim().toLocaleLowerCase("pt-BR");
   const tableState = toolTableState("emails");
@@ -7369,8 +7485,9 @@ function renderToolEmails(root) {
       toolEmailValue(b, tableState.sortKey), "pt-BR", { numeric: true, sensitivity: "base" }
     ) * tableState.sortDir);
   }
+  const page = paginateToolRows(accounts, "emails");
   const columns = visibleToolColumns("emails");
-  const rows = accounts.length ? accounts.map((account) => `<tr>
+  const rows = page.rows.length ? page.rows.map((account) => `<tr>
     ${columns.map((col) => {
       if (col.k === "client") return `<td><strong>${esc(account.client || "—")}</strong></td>`;
       if (col.k === "password") return account.password
@@ -7381,15 +7498,11 @@ function renderToolEmails(root) {
     }).join("")}
     <td><span class="tool-row-actions"><button class="tool-icon-btn tool-email-edit" data-id="${esc(account.id)}" title="Editar senha local e tags">✎</button>${usesServer ? "" : `<button class="tool-icon-btn tool-email-delete" data-id="${esc(account.id)}" title="Excluir">×</button>`}</span></td>
   </tr>`).join("") : `<tr><td colspan="${columns.length + 1}" class="tool-empty">Nenhum e-mail cadastrado.</td></tr>`;
-  const feedback = usesServer && remoteToolEmailsLoading ? '<div class="tool-empty">Carregando e-mails...</div>'
-    : usesServer && remoteToolEmailsError ? `<div class="tool-empty">Não foi possível carregar os e-mails: ${esc(remoteToolEmailsError)}</div>` : "";
-  const activeFilters = Object.entries(tableState.filters).filter(([, values]) => values?.size);
-  const filterStrip = `<div class="registration-filter-strip"><div class="registration-filter-badges">${activeFilters.map(([key, values]) => {
-    const label = TOOL_COLUMN_DEFS.emails.find((col) => col.k === key)?.h || key;
-    return `<button class="registration-filter-badge tool-filter-badge" data-key="${esc(key)}" title="Limpar filtro"><span>${esc(label)}: ${esc([...values].join(", "))}</span><b>×</b></button>`;
-  }).join("")}</div><button class="filter-clear-all tool-filter-clear-all" type="button"${activeFilters.length < 2 ? " hidden" : ""}><span aria-hidden="true">×</span> Limpar tudo</button></div>`;
-  root.innerHTML = `${toolsToolbarHtml(accounts.length, "Criar e-mail pelo CNPJ", "tool-email-add")}${filterStrip}${feedback}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const filterStrip = toolFilterStrip("emails", tableState, { loading: usesServer && remoteToolEmailsLoading, error: usesServer ? remoteToolEmailsError : "" });
+  root.innerHTML = `${toolsToolbarHtml(accounts.length, "Criar e-mail pelo CNPJ", "tool-email-add")}${filterStrip}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>${toolsPaginationHtml(accounts.length, "emails")}`;
   wireToolsToolbar(root);
+  wireToolsPagination(root, "emails");
+  wireToolsLoadRetry(root, "emails");
   wireSecondaryTableSelection(root.querySelector("table"), "tools:emails");
   document.getElementById("tool-email-add").addEventListener("click", () => openToolEmailForm());
   root.querySelectorAll(".tool-email-reveal").forEach((button) => button.addEventListener("click", () => toggleToolEmailSecret(button.dataset.id)));
@@ -7503,6 +7616,8 @@ function openToolEmailForm(id = null) {
         const index = remoteToolEmails.findIndex((account) => account.email === result.account.email);
         if (index >= 0) remoteToolEmails[index] = result.account;
         else remoteToolEmails.unshift(result.account);
+        remoteToolEmailsLoaded = true;
+        remoteToolEmailsLoadedAt = Date.now();
         toast("Dados salvos no CRM. A senha da HostGator não foi alterada.");
         returnToEmails();
       } catch (err) {
@@ -7537,6 +7652,7 @@ function openToolEmailForm(id = null) {
         if (index >= 0) remoteToolEmails[index] = result.account;
         else remoteToolEmails.unshift(result.account);
         remoteToolEmailsLoaded = true;
+        remoteToolEmailsLoadedAt = Date.now();
         toast(result.status === "created"
           ? `E-mail ${result.account.email} criado.`
           : result.status === "existing_unmanaged"

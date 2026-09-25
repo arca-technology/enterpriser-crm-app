@@ -386,7 +386,7 @@
   .registrations-footer .foot-btn{cursor:default}
   .tools-root{min-height:0;flex:1 1 auto;padding:0;overflow:hidden;display:flex;flex-direction:column}
   .tools-toolbar h4{margin:0;font-size:12px;text-transform:uppercase;color:var(--muted);letter-spacing:.4px}
-  .tool-folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px;padding:10px 14px;overflow:auto}
+  .tool-folder-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));align-content:start;gap:10px;min-height:0;flex:1 1 auto;padding:10px 14px;overflow:auto}
   .tool-folder{display:flex;align-items:flex-start;gap:11px;min-height:76px;padding:13px;border:1px solid var(--border);border-radius:7px;background:var(--panel2)}
   .tool-folder-icon{font-size:23px;line-height:1;flex:0 0 auto}
   .tool-folder-main{min-width:0;flex:1}
@@ -501,6 +501,12 @@
   .registrations-product{display:grid;gap:3px}
   .registrations-product small{color:var(--muted);font-size:10.5px}
   .registration-filter-strip{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:20px;height:20px;flex:0 0 20px;padding:1px 8px;background:var(--bg);border-bottom:1px solid var(--border2);box-sizing:border-box}
+  .tools-filter-strip{position:relative;overflow:hidden}
+  .tools-loading-progress{position:absolute;right:0;bottom:0;left:0;height:2px;background:color-mix(in srgb,var(--cyan) 18%,transparent);overflow:hidden}
+  .tools-loading-progress span{display:block;width:32%;height:100%;background:var(--cyan);animation:tools-progress 1.05s ease-in-out infinite}
+  .tool-load-retry{margin-left:auto;border:0;background:transparent;color:var(--red);padding:2px 5px;font:inherit;font-size:9.5px;cursor:pointer}
+  .tool-load-retry:hover{color:var(--text)}
+  @keyframes tools-progress{from{transform:translateX(-110%)}to{transform:translateX(330%)}}
   .registration-filter-badges{display:flex;align-items:center;gap:5px;flex:1 1 auto;min-width:0;overflow-x:auto}
   .registration-filter-badge{display:inline-flex;align-items:center;gap:4px;max-width:220px;height:16px;border:1px solid #275a8d;
     background:#102c4e;color:#8fc5ff;border-radius:4px;padding:0 5px;font-size:9px;font-weight:700;white-space:nowrap;cursor:pointer}

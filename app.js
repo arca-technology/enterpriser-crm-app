@@ -2135,9 +2135,6 @@ function renderHome(c) {
     <td>${esc(task.project_name)}</td>
     <td>${esc(task.due_date ? dt(task.due_date) : "—")}</td>
     <td>${badge(task.status === "doing" ? "negotiation" : "lead", TASK_STATUS.find((s) => s.id === task.status)?.label || "A fazer")}</td>
-    <td class="act table-actions-cell">${tableActionButtons({
-      open: { className: "home-project-btn", attrs: { "data-project-id": task.project_id }, title: "Abrir entrega" }
-    })}</td>
   </tr>`).join("");
   const projectStatuses = PROJECT_STATUSES.map((status) => {
     const count = (c.projects || []).filter((project) => project.status === status).length;
@@ -2149,8 +2146,8 @@ function renderHome(c) {
     <div class="home-grid">
       <section class="home-panel">
         <h3>Próximas tarefas</h3>
-        <div class="task-table-wrap"><table><thead><tr><th>Tarefa</th><th>Cliente</th><th>Entrega</th><th>Prazo</th><th>Status</th>${tableActionsHead()}</tr></thead>
-        <tbody>${activityRows || '<tr><td colspan="6" class="empty">Nenhuma tarefa pendente.</td></tr>'}</tbody></table></div>
+        <div class="task-table-wrap"><table><thead><tr><th>Tarefa</th><th>Cliente</th><th>Entrega</th><th>Prazo</th><th>Status</th></tr></thead>
+        <tbody>${activityRows || '<tr><td colspan="5" class="empty">Nenhuma tarefa pendente.</td></tr>'}</tbody></table></div>
       </section>
       <section class="home-panel">
         <h3>Entregas por status</h3>

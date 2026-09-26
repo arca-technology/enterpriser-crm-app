@@ -1184,6 +1184,24 @@ function safeHttpUrl(value) {
   }
 }
 const badge = (v, label) => `<span class="badge b-${v}">${esc(label || v)}</span>`;
+const TABLE_ACTION_ICONS = {
+  open: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4z"/></svg>',
+  clone: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>',
+  delete: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 10v6M14 10v6"/></svg>'
+};
+function tableActionButtons(actions = {}) {
+  const labels = { open: "Abrir", edit: "Editar", clone: "Clonar", delete: "Excluir" };
+  const attrsHtml = (attrs = {}) => Object.entries(attrs).map(([key, value]) => ` ${esc(key)}="${esc(value)}"`).join("");
+  return `<span class="table-actions">${["open", "edit", "clone", "delete"].map((kind) => {
+    const action = actions[kind];
+    const enabled = Boolean(action && action.enabled !== false);
+    const title = action?.title || labels[kind];
+    const classes = ["rowbtn", "table-action-btn", `action-${kind}`, enabled ? action?.className : "is-disabled"].filter(Boolean).join(" ");
+    return `<button type="button" class="${classes}" title="${esc(enabled ? title : `${labels[kind]} indisponível`)}" aria-label="${esc(enabled ? title : `${labels[kind]} indisponível`)}"${enabled ? attrsHtml(action.attrs) : ' disabled aria-disabled="true"'}>${TABLE_ACTION_ICONS[kind]}</button>`;
+  }).join("")}</span>`;
+}
+const tableActionsHead = () => '<th class="noclick table-actions-head">AÇÕES</th>';
 function splitMultiValues(value) {
   return String(value || "").split(/[;,\n]+/).map((item) => item.trim()).filter(Boolean);
 }
@@ -1641,16 +1659,13 @@ function renderTable(c) {
   const selectHead = selectable
     ? `<th class="select-head noclick"><input type="checkbox" id="select-all-rows"${rows.length && selectedVisible.length === rows.length ? " checked" : ""}></th>`
     : "";
-  const actionHead = state.tab === "activities" ? "" : `<th class="noclick action-col">AÇÕES</th>`;
+  const actionHead = tableActionsHead();
   const head = selectHead + cols.map((col) => {
     const isFiltered = filters[col.k]?.size > 0;
     const arr = isFiltered ? `<span class="arrow">▼</span>` : state.sortK === col.k ? `<span class="arrow">${state.sortDir > 0 ? "▲" : "▼"}</span>` : "";
     const cls = [isFiltered ? "filtered" : "", col.thCls || ""].filter(Boolean).join(" ");
     return `<th data-k="${col.k}" class="${cls}" title="Clique para ordenar. Ctrl+clique para filtrar.">${col.h}${arr}</th>`;
   }).join("") + actionHead;
-
-  const editSvg = `<svg viewBox="0 0 20 20"><path d="M13 4l3 3-8 8H5v-3z"/></svg>`;
-  const delSvg = `<svg viewBox="0 0 20 20"><path d="M4 6h12M8 6V4h4v2M6 6l1 10h6l1-10"/></svg>`;
 
   const body = rows.map((r) => {
     const rid = r[rowKey];
@@ -1663,33 +1678,43 @@ function renderTable(c) {
       return `<td class="${cls}" data-k="${esc(col.k)}">${val}</td>`;
     }).join("");
     if (state.tab === "conversations") {
-      return `<tr>${selectTd}${tds}<td class="act action-col">
-        <button class="rowbtn convert" data-id="${esc(rid)}" title="Transformar em negociação">+</button>
-        <button class="rowbtn del-import" data-id="${esc(rid)}" title="Excluir">${delSvg}</button></td></tr>`;
+      return `<tr>${selectTd}${tds}<td class="act action-col table-actions-cell">${tableActionButtons({
+        open: { className: "open-chat", attrs: { "data-id": rid }, title: "Abrir conversa" },
+        delete: { className: "del-import", attrs: { "data-id": rid }, title: "Excluir conversa" }
+      })}</td></tr>`;
     }
     if (state.tab === "projects") {
-      return `<tr>${selectTd}${tds}<td class="act action-col">
-        <button class="rowbtn project-board-btn" data-id="${esc(rid)}" title="Abrir tarefas">☷</button>
-        <button class="rowbtn edit" data-id="${esc(rid)}" title="Editar">${editSvg}</button>
-        <button class="rowbtn del" data-id="${esc(rid)}" title="Excluir">${delSvg}</button></td></tr>`;
+      return `<tr>${selectTd}${tds}<td class="act action-col table-actions-cell">${tableActionButtons({
+        open: { className: "project-board-btn", attrs: { "data-id": rid }, title: "Abrir entrega" },
+        edit: { className: "edit", attrs: { "data-id": rid }, title: "Editar entrega" },
+        delete: { className: "del", attrs: { "data-id": rid }, title: "Excluir entrega" }
+      })}</td></tr>`;
     }
-    if (state.tab === "activities") return `<tr>${selectTd}${tds}</tr>`;
+    if (state.tab === "activities") {
+      const checklist = normalizeChecklist(r.checklist);
+      return `<tr>${selectTd}${tds}<td class="act action-col table-actions-cell">${tableActionButtons({
+        open: checklist.length ? { className: "checklist-open", attrs: { "data-id": rid }, title: "Abrir checklist" } : null,
+        edit: r.project_id ? { className: "main-task-edit", attrs: { "data-id": rid, "data-project-id": r.project_id }, title: "Editar tarefa" } : null
+      })}</td></tr>`;
+    }
     if (state.tab === "products") {
-      return `<tr>${selectTd}${tds}<td class="act action-col">
-        <button class="rowbtn product-activities-btn" data-id="${esc(rid)}" title="Tarefas, metas e objetivos do produto">☷</button>
-        <button class="rowbtn edit" data-id="${esc(rid)}" title="Editar">${editSvg}</button>
-        <button class="rowbtn del" data-id="${esc(rid)}" title="Excluir">${delSvg}</button></td></tr>`;
+      return `<tr>${selectTd}${tds}<td class="act action-col table-actions-cell">${tableActionButtons({
+        open: { className: "product-activities-btn", attrs: { "data-id": rid }, title: "Abrir estrutura do produto" },
+        edit: { className: "edit", attrs: { "data-id": rid }, title: "Editar produto" },
+        delete: { className: "del", attrs: { "data-id": rid }, title: "Excluir produto" }
+      })}</td></tr>`;
     }
-    return `<tr>${selectTd}${tds}<td class="act action-col">
-      <button class="rowbtn edit" data-id="${esc(rid)}" title="Editar">${editSvg}</button>
-      <button class="rowbtn del" data-id="${esc(rid)}" title="Excluir">${delSvg}</button></td></tr>`;
+    return `<tr>${selectTd}${tds}<td class="act action-col table-actions-cell">${tableActionButtons({
+      edit: { className: "edit", attrs: { "data-id": rid }, title: "Editar registro" },
+      delete: { className: "del", attrs: { "data-id": rid }, title: "Excluir registro" }
+    })}</td></tr>`;
   }).join("");
 
   const pagination = paginated ? `<div class="table-pagination">
     <span>${allRows.length ? `${(currentPage - 1) * state.pageSize + 1}-${Math.min(currentPage * state.pageSize, allRows.length)} de ${allRows.length}` : "0 registros"}</span>
     <div><button class="btn" id="page-prev"${currentPage <= 1 ? " disabled" : ""}>‹</button><span>Página ${currentPage} de ${totalPages}</span><button class="btn" id="page-next"${currentPage >= totalPages ? " disabled" : ""}>›</button></div>
   </div>` : "";
-  const emptyColspan = cols.length + (selectable ? 1 : 0) + (state.tab === "activities" ? 0 : 1);
+  const emptyColspan = cols.length + (selectable ? 1 : 0) + 1;
   const tableBody = body || `<tr><td colspan="${emptyColspan}" class="empty">Nenhum registro. Clique em <b>+</b> para criar.</td></tr>`;
   document.getElementById("main").innerHTML = `<div class="data-table-wrap"><div class="table-scroll"><table class="data-table" data-tab="${esc(state.tab)}"><thead><tr>${head}</tr></thead><tbody>${tableBody}</tbody></table></div>${pagination}</div>`;
 
@@ -1723,6 +1748,8 @@ function renderTable(c) {
   }));
   document.querySelectorAll(".checklist-open").forEach((button) =>
     button.addEventListener("click", () => openActivityChecklist(button.dataset.id)));
+  document.querySelectorAll(".main-task-edit").forEach((button) =>
+    button.addEventListener("click", () => openDeliveryTaskDrawer(button.dataset.projectId, button.dataset.id)));
   document.querySelectorAll(".row-select").forEach((box) =>
     box.addEventListener("change", () => {
       if (box.checked) selectedSet.add(box.dataset.id);
@@ -2108,7 +2135,9 @@ function renderHome(c) {
     <td>${esc(task.project_name)}</td>
     <td>${esc(task.due_date ? dt(task.due_date) : "—")}</td>
     <td>${badge(task.status === "doing" ? "negotiation" : "lead", TASK_STATUS.find((s) => s.id === task.status)?.label || "A fazer")}</td>
-    <td class="act"><button class="rowbtn home-project-btn" data-project-id="${esc(task.project_id)}" title="Abrir entrega">☷</button></td>
+    <td class="act table-actions-cell">${tableActionButtons({
+      open: { className: "home-project-btn", attrs: { "data-project-id": task.project_id }, title: "Abrir entrega" }
+    })}</td>
   </tr>`).join("");
   const projectStatuses = PROJECT_STATUSES.map((status) => {
     const count = (c.projects || []).filter((project) => project.status === status).length;
@@ -2120,7 +2149,7 @@ function renderHome(c) {
     <div class="home-grid">
       <section class="home-panel">
         <h3>Próximas tarefas</h3>
-        <div class="task-table-wrap"><table><thead><tr><th>Tarefa</th><th>Cliente</th><th>Entrega</th><th>Prazo</th><th>Status</th><th></th></tr></thead>
+        <div class="task-table-wrap"><table><thead><tr><th>Tarefa</th><th>Cliente</th><th>Entrega</th><th>Prazo</th><th>Status</th>${tableActionsHead()}</tr></thead>
         <tbody>${activityRows || '<tr><td colspan="6" class="empty">Nenhuma tarefa pendente.</td></tr>'}</tbody></table></div>
       </section>
       <section class="home-panel">
@@ -2249,17 +2278,18 @@ function renderProductActivities() {
     <td>${priorityBadge(item.priority)}</td>
     <td>${esc(responsibilityNames(item.default_assignee_ids, item.default_owner_id, item.default_assignee_job_titles))}</td>
     <td>${esc(dependencyNames(item.dependency_template_ids, item.depends_on_template_id, templates))}</td>
-    <td class="act">
-      ${item.parent_template_id ? "" : `<button class="rowbtn pa-add-subtask" data-id="${esc(item.id)}" title="Adicionar subtarefa">＋</button>`}
-      <button class="rowbtn pa-delete" data-id="${esc(item.id)}" title="Desvincular do produto">✕</button>
-    </td></tr>`).join("");
+    <td class="act table-actions-cell">${tableActionButtons({
+      edit: { className: "pa-edit", attrs: { "data-id": item.id }, title: item.parent_template_id ? "Editar subtarefa" : "Editar tarefa" },
+      clone: { className: "pa-clone", attrs: { "data-id": item.id }, title: item.parent_template_id ? "Clonar subtarefa" : "Clonar tarefa" },
+      delete: { className: "pa-delete", attrs: { "data-id": item.id }, title: "Desvincular do produto" }
+    })}</td></tr>`).join("");
   root.innerHTML = `<div class="modal-toolbar"><span class="muted">${templates.length} tarefa(s) vinculada(s)</span><div class="modal-toolbar-actions"><button class="btn primary" id="pa-ready">Vincular tarefas</button></div></div>
     <div class="product-activity-list"><table><thead><tr>
-      <th class="noclick"></th><th>Grupo</th><th>Setor</th><th>Canal</th><th>Tipo</th><th>Recorrência</th><th>Tarefa</th><th>Informação</th><th>Checklist</th><th>Objetivo</th><th>Prioridade</th><th>Responsáveis padrão</th><th>Depende de</th><th>Ações</th>
+      <th class="noclick"></th><th>Grupo</th><th>Setor</th><th>Canal</th><th>Tipo</th><th>Recorrência</th><th>Tarefa</th><th>Informação</th><th>Checklist</th><th>Objetivo</th><th>Prioridade</th><th>Responsáveis padrão</th><th>Depende de</th>${tableActionsHead()}
     </tr></thead><tbody id="pa-tbody">${rows || '<tr><td colspan="14" class="empty">Nenhuma tarefa cadastrada para este produto.</td></tr>'}</tbody></table></div>`;
   document.getElementById("pa-ready").addEventListener("click", openReadyActivityPicker);
-  document.querySelectorAll(".pa-add-subtask").forEach((button) => button.addEventListener("click", () =>
-    openProductActivityDrawer(null, null, button.dataset.id)));
+  document.querySelectorAll(".pa-edit").forEach((button) => button.addEventListener("click", () => openProductActivityDrawer(button.dataset.id)));
+  document.querySelectorAll(".pa-clone").forEach((button) => button.addEventListener("click", () => cloneProductActivity(button.dataset.id)));
   document.querySelectorAll(".pa-delete").forEach((button) => button.addEventListener("click", async () => {
     if (!window.confirm("Desvincular esta tarefa do produto? Entregas que já receberam a tarefa manterão a cópia existente.")) return;
     try {
@@ -2326,15 +2356,15 @@ function renderProductObjectives() {
       <td>${esc(owner)}</td>
       <td>${item.target_days == null || item.target_days === "" ? "—" : `${esc(item.target_days)} dia(s)`}</td>
       <td>${activityCount}</td>
-      <td class="act">
-        <button class="rowbtn po-edit" data-id="${esc(item.id)}" title="Editar">✎</button>
-        <button class="rowbtn po-delete" data-id="${esc(item.id)}" title="Excluir">✕</button>
-      </td>
+      <td class="act table-actions-cell">${tableActionButtons({
+        edit: { className: "po-edit", attrs: { "data-id": item.id }, title: "Editar objetivo" },
+        delete: { className: "po-delete", attrs: { "data-id": item.id }, title: "Excluir objetivo" }
+      })}</td>
     </tr>`;
   }).join("");
   root.innerHTML = `<div class="modal-toolbar"><span class="muted">${objectives.length} objetivo(s) do produto</span><button class="btn primary" id="po-new">+ Objetivo</button></div>
     <div class="product-activity-list"><table><thead><tr>
-      <th>Objetivo</th><th>Critério de conclusão</th><th>Depende de</th><th>Responsável padrão</th><th>Prazo sugerido</th><th>Tarefas</th><th></th>
+      <th>Objetivo</th><th>Critério de conclusão</th><th>Depende de</th><th>Responsável padrão</th><th>Prazo sugerido</th><th>Tarefas</th>${tableActionsHead()}
     </tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">Nenhum objetivo cadastrado para este produto.</td></tr>'}</tbody></table></div>`;
   document.getElementById("po-new").addEventListener("click", () => openProductObjectiveDrawer());
   document.querySelectorAll(".po-edit").forEach((button) => button.addEventListener("click", () => openProductObjectiveDrawer(button.dataset.id)));
@@ -2479,12 +2509,15 @@ function renderProductGoals() {
       <td>${esc(dependencies)}</td>
       <td>${item.target_days == null ? "—" : `${esc(item.target_days)} dia(s)`}</td>
       <td>${esc(owner)}</td>
-      <td class="act"><button class="rowbtn pg-edit" data-id="${esc(item.id)}" title="Editar">✎</button><button class="rowbtn pg-delete" data-id="${esc(item.id)}" title="Excluir">✕</button></td>
+      <td class="act table-actions-cell">${tableActionButtons({
+        edit: { className: "pg-edit", attrs: { "data-id": item.id }, title: "Editar meta" },
+        delete: { className: "pg-delete", attrs: { "data-id": item.id }, title: "Excluir meta" }
+      })}</td>
     </tr>`;
   }).join("");
   root.innerHTML = `<div class="modal-toolbar"><span class="muted">${goals.length} meta(s) do produto</span><button class="btn primary" id="pg-new">+ Meta</button></div>
     <div class="product-activity-list"><table><thead><tr>
-    <th>Meta</th><th>Indicador</th><th>Valor-alvo</th><th>Depende de</th><th>Prazo sugerido</th><th>Responsável padrão</th><th></th>
+    <th>Meta</th><th>Indicador</th><th>Valor-alvo</th><th>Depende de</th><th>Prazo sugerido</th><th>Responsável padrão</th>${tableActionsHead()}
   </tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">Nenhuma meta cadastrada para este produto.</td></tr>'}</tbody></table></div>`;
   document.getElementById("pg-new").addEventListener("click", () => openProductGoalDrawer());
   document.querySelectorAll(".pg-edit").forEach((button) => button.addEventListener("click", () => openProductGoalDrawer(button.dataset.id)));
@@ -3237,6 +3270,31 @@ function taskCardHtml(task) {
   </div>`;
 }
 
+async function deleteDeliveryTask(projectId, id) {
+  const allTasks = loadProjectTasks();
+  const currentTask = allTasks.find((task) => task.id === id);
+  if (!currentTask || currentTask.source_template_id) return;
+  const descendants = taskDescendantIds(id, allTasks);
+  const childCount = descendants.size;
+  if (!window.confirm(childCount ? `Excluir esta tarefa e ${childCount} subtarefa(s)?` : "Excluir esta tarefa?")) return;
+  try {
+    const parent = taskParent(currentTask, allTasks);
+    const siblings = parent ? taskSubtasks(parent.id, allTasks).filter((task) => task.id !== id) : [];
+    if (parent && !siblings.length) {
+      const changes = { checklist: normalizeChecklist(currentTask.checklist), updated_at: new Date().toISOString() };
+      if (isLive()) await updateRow("activities", parent.id, changes);
+      Object.assign(parent, changes);
+    }
+    if (isLive()) await deleteRow("activities", id);
+    const removedIds = new Set([id, ...descendants]);
+    const remaining = allTasks.filter((task) => !removedIds.has(task.id));
+    if (isLive()) cache.activityRecords = remaining;
+    else saveProjectTasks(remaining);
+    refreshActivityCache();
+    renderProjectBoard(projectId);
+  } catch (err) { toast("Erro ao excluir tarefa · " + err.message, true); }
+}
+
 function openProjectBoard(projectId) {
   const project = (cache.projects || []).find((p) => p.id === projectId);
   if (!project) return;
@@ -3304,12 +3362,16 @@ function renderTaskTable(tasks) {
       <td>${esc(task.due_date ? dt(task.due_date) : "—")}</td>
       <td>${esc(status)}</td>
       <td class="muted">${esc(task.notes || "—")}</td>
-      <td><span class="tool-row-actions">${parent ? "" : `<button class="rowbtn task-add-subtask" data-id="${esc(task.id)}" title="Adicionar subtarefa">＋</button>`}<button class="rowbtn task-edit" data-id="${esc(task.id)}" title="Editar tarefa">✎</button></span></td>
+      <td class="table-actions-cell">${tableActionButtons({
+        open: terminal && checklist.total ? { className: "checklist-open", attrs: { "data-id": task.id }, title: "Abrir checklist" } : null,
+        edit: { className: "task-edit", attrs: { "data-id": task.id }, title: "Editar tarefa" },
+        delete: !task.source_template_id ? { className: "task-delete-table", attrs: { "data-id": task.id }, title: "Excluir tarefa" } : null
+      })}</td>
     </tr>`;
   }).join("");
   return `<div class="task-table-shell"><div class="task-table-wrap">
     <table><thead><tr>
-      <th>Tarefa</th><th>Origem</th><th>Prioridade</th><th>Depende de</th><th>Informação</th><th>Grupo</th><th>Setor</th><th>Canal</th><th>Tipo</th><th>Checklist</th><th>Subtarefas</th><th>Objetivo</th><th>Responsáveis</th><th>Prazo</th><th>Status</th><th>Notas</th><th>Ações</th>
+      <th>Tarefa</th><th>Origem</th><th>Prioridade</th><th>Depende de</th><th>Informação</th><th>Grupo</th><th>Setor</th><th>Canal</th><th>Tipo</th><th>Checklist</th><th>Subtarefas</th><th>Objetivo</th><th>Responsáveis</th><th>Prazo</th><th>Status</th><th>Notas</th>${tableActionsHead()}
     </tr></thead><tbody>${rows || '<tr><td colspan="17" class="empty">Sem tarefas.</td></tr>'}</tbody></table>
   </div><div class="table-pagination"><span>${tasks.length ? `${start + 1}-${Math.min(start + projectBoardState.pageSize, tasks.length)} de ${tasks.length}` : "0 registros"}</span>
     <div><button class="btn" id="project-page-prev"${projectBoardState.page <= 1 ? " disabled" : ""}>‹</button><span>Página ${projectBoardState.page} de ${totalPages}</span><button class="btn" id="project-page-next"${projectBoardState.page >= totalPages ? " disabled" : ""}>›</button></div>
@@ -3373,11 +3435,12 @@ function renderDeliveryObjectives(projectId, tasks, sourceRows = null) {
       <td><select class="objective-control delivery-objective-owner">${userOptions(objective.owner_id || "")}</select></td>
       <td><input class="objective-control delivery-objective-due" type="date" value="${esc(objective.due_date || "")}"></td>
       <td><select class="objective-control delivery-objective-status">${taskStatusOptions(objective.status || "todo")}</select></td>
+      <td class="table-actions-cell">${tableActionButtons()}</td>
     </tr>`;
   }).join("");
   return `<div class="task-table-wrap"><table><thead><tr>
-    <th>Objetivo</th><th>Critério de conclusão</th><th>Progresso das tarefas</th><th>Depende de</th><th>Responsável</th><th>Prazo</th><th>Status</th>
-  </tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">Esta entrega ainda não possui objetivos.</td></tr>'}</tbody></table></div>`;
+    <th>Objetivo</th><th>Critério de conclusão</th><th>Progresso das tarefas</th><th>Depende de</th><th>Responsável</th><th>Prazo</th><th>Status</th>${tableActionsHead()}
+  </tr></thead><tbody>${rows || '<tr><td colspan="8" class="empty">Esta entrega ainda não possui objetivos.</td></tr>'}</tbody></table></div>`;
 }
 
 function deliveryObjectiveDependencyState(objective) {
@@ -3445,11 +3508,12 @@ function renderDeliveryGoals(projectId, sourceRows = null) {
       <td><select class="objective-control delivery-goal-owner">${userOptions(goal.owner_id || "")}</select></td>
       <td><input class="objective-control delivery-goal-due" type="date" value="${esc(goal.due_date || "")}"></td>
       <td><select class="objective-control delivery-goal-status">${taskStatusOptions(goal.status || "todo")}</select></td>
+      <td class="table-actions-cell">${tableActionButtons()}</td>
     </tr>`;
   }).join("");
   return `<div class="task-table-shell"><div class="task-table-wrap"><table><thead><tr>
-    <th>Meta</th><th>Indicador</th><th>Valor atual</th><th>Valor-alvo</th><th>Progresso</th><th>Depende de</th><th>Responsável</th><th>Prazo</th><th>Status</th>
-  </tr></thead><tbody>${rows || '<tr><td colspan="9" class="empty">Esta entrega ainda não possui metas.</td></tr>'}</tbody></table></div>
+    <th>Meta</th><th>Indicador</th><th>Valor atual</th><th>Valor-alvo</th><th>Progresso</th><th>Depende de</th><th>Responsável</th><th>Prazo</th><th>Status</th>${tableActionsHead()}
+  </tr></thead><tbody>${rows || '<tr><td colspan="10" class="empty">Esta entrega ainda não possui metas.</td></tr>'}</tbody></table></div>
   <div class="table-pagination"><span>${goals.length} meta(s)</span><div><span>Acompanhamento da entrega</span></div></div></div>`;
 }
 
@@ -4189,6 +4253,8 @@ function wireProjectBoard(projectId) {
     button.addEventListener("click", () => openDeliveryTaskDrawer(projectId, null, button.dataset.id)));
   document.querySelectorAll("#project-board-root .task-edit[data-id]").forEach((button) =>
     button.addEventListener("click", () => openDeliveryTaskDrawer(projectId, button.dataset.id)));
+  document.querySelectorAll("#project-board-root .task-delete-table[data-id]").forEach((button) =>
+    button.addEventListener("click", () => deleteDeliveryTask(projectId, button.dataset.id)));
   document.querySelectorAll("#project-board-root .task-card").forEach((card) => {
     const id = card.dataset.id;
     const rerender = () => renderProjectBoard(projectId);
@@ -4198,30 +4264,7 @@ function wireProjectBoard(projectId) {
     card.querySelector(".task-due")?.addEventListener("change", async (e) => updateProjectTask(id, { due_date: e.target.value || null }));
     card.querySelector(".task-notes")?.addEventListener("change", async (e) => updateProjectTask(id, { notes: e.target.value }));
     card.querySelector(".task-status")?.addEventListener("change", async (e) => { await updateProjectTask(id, { status: e.target.value }); rerender(); });
-    card.querySelector(".del-task")?.addEventListener("click", async () => {
-      const allTasks = loadProjectTasks();
-      const currentTask = allTasks.find((task) => task.id === id);
-      const descendants = taskDescendantIds(id, allTasks);
-      const childCount = descendants.size;
-      if (!window.confirm(childCount ? `Excluir esta tarefa e ${childCount} subtarefa(s)?` : "Excluir esta tarefa?")) return;
-      try {
-        const parent = taskParent(currentTask, allTasks);
-        const siblings = parent ? taskSubtasks(parent.id, allTasks).filter((task) => task.id !== id) : [];
-        if (parent && !siblings.length) {
-          const restoredChecklist = normalizeChecklist(currentTask.checklist);
-          const changes = { checklist: restoredChecklist, updated_at: new Date().toISOString() };
-          if (isLive()) await updateRow("activities", parent.id, changes);
-          Object.assign(parent, changes);
-        }
-        if (isLive()) await deleteRow("activities", id);
-        const removedIds = new Set([id, ...descendants]);
-        const remaining = allTasks.filter((task) => !removedIds.has(task.id));
-        if (isLive()) cache.activityRecords = remaining;
-        else saveProjectTasks(remaining);
-        refreshActivityCache();
-        renderProjectBoard(projectId);
-      } catch (err) { toast("Erro ao excluir tarefa · " + err.message, true); }
-    });
+    card.querySelector(".del-task")?.addEventListener("click", () => deleteDeliveryTask(projectId, id));
   });
 }
 
@@ -5857,10 +5900,13 @@ function renderRegistrationsSection() {
       <td>${esc(product.category || "—")}</td><td>${esc(product.status || "—")}</td>
       <td>${Number(product.price || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</td>
       <td>${product.duration_days ? `${esc(product.duration_days)} dia(s)` : "—"}</td>
-      <td class="act"><button class="rowbtn reg-product-setup" data-id="${esc(product.id)}" title="Configurar tarefas, metas e objetivos">☷</button><button class="rowbtn edit reg-product-edit" data-id="${esc(product.id)}" title="Editar produto">✎</button></td>
+      <td class="act table-actions-cell">${tableActionButtons({
+        open: { className: "reg-product-setup", attrs: { "data-id": product.id }, title: "Abrir estrutura do produto" },
+        edit: { className: "edit reg-product-edit", attrs: { "data-id": product.id }, title: "Editar produto" }
+      })}</td>
     </tr>`).join("");
     root.innerHTML = `<div class="modal-toolbar"><span class="muted">${cache.products.length} produto(s)</span><button class="btn primary" id="registration-add">+ Produto</button></div>
-      <div class="product-activity-list"><table><thead><tr><th>Produto</th><th>Categoria</th><th>Status</th><th>Valor</th><th>Duração</th><th>Ações</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Nenhum produto cadastrado.</td></tr>'}</tbody></table></div>`;
+      <div class="product-activity-list"><table><thead><tr><th>Produto</th><th>Categoria</th><th>Status</th><th>Valor</th><th>Duração</th>${tableActionsHead()}</tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">Nenhum produto cadastrado.</td></tr>'}</tbody></table></div>`;
     document.getElementById("registration-add")?.addEventListener("click", () => openForm("products", null, { returnToRegistrations: "products" }));
     root.querySelectorAll(".reg-product-setup").forEach((button) => button.addEventListener("click", () => openProductActivities(button.dataset.id, { returnToRegistrations: "products" })));
     root.querySelectorAll(".reg-product-edit").forEach((button) => button.addEventListener("click", () => openForm("products", button.dataset.id, { returnToRegistrations: "products" })));
@@ -5871,10 +5917,10 @@ function renderRegistrationsSection() {
     const pipelines = cache.pipelines || [];
     const rows = pipelines.map((pipeline) => {
       const stages = Array.isArray(pipeline.stages) ? pipeline.stages : [];
-      return `<tr><td><strong>${esc(pipeline.name || "—")}</strong></td><td>${stages.length}</td><td>${esc(stages.join(" → ") || "—")}</td><td class="act"><button class="rowbtn edit reg-pipeline-edit" data-id="${esc(pipeline.id)}" title="Editar pipeline">✎</button></td></tr>`;
+      return `<tr><td><strong>${esc(pipeline.name || "—")}</strong></td><td>${stages.length}</td><td>${esc(stages.join(" → ") || "—")}</td><td class="act table-actions-cell">${tableActionButtons({ edit: { className: "edit reg-pipeline-edit", attrs: { "data-id": pipeline.id }, title: "Editar pipeline" } })}</td></tr>`;
     }).join("");
     root.innerHTML = `<div class="modal-toolbar"><span class="muted">${pipelines.length}/${MAX_PIPELINES} pipeline(s)</span><button class="btn primary" id="registration-add"${pipelines.length >= MAX_PIPELINES ? " disabled" : ""}>+ Pipeline</button></div>
-      <div class="product-activity-list"><table><thead><tr><th>Pipeline</th><th>Etapas</th><th>Fluxo</th><th>Ações</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="empty">Nenhum pipeline cadastrado.</td></tr>'}</tbody></table></div>`;
+      <div class="product-activity-list"><table><thead><tr><th>Pipeline</th><th>Etapas</th><th>Fluxo</th>${tableActionsHead()}</tr></thead><tbody>${rows || '<tr><td colspan="4" class="empty">Nenhum pipeline cadastrado.</td></tr>'}</tbody></table></div>`;
     document.getElementById("registration-add")?.addEventListener("click", () => openPipelinesModal("new", true));
     root.querySelectorAll(".reg-pipeline-edit").forEach((button) => button.addEventListener("click", () => openPipelinesModal(button.dataset.id, true)));
     wireRegistrationTable();
@@ -5882,9 +5928,9 @@ function renderRegistrationsSection() {
   }
   if (section === "users") {
     const users = cache.users || [];
-    const rows = users.map((user) => `<tr><td><strong>${esc(user.full_name || user.name || "—")}</strong></td><td>${esc(user.email || "—")}</td><td>${esc(user.phone || "—")}</td><td>${esc(ROLE_LABEL[user.role] || user.role || "—")}</td><td>${esc(user.function_name || "—")}</td><td>${esc(user.job_title || "—")}</td><td>${user.status === "active" ? "Ativo" : "Inativo"}</td><td>${user.auth_user_id ? "Login ativo" : "Sem login"}</td><td class="act"><button class="rowbtn edit reg-user-edit" data-id="${esc(user.id)}" title="Editar usuário">✎</button></td></tr>`).join("");
+    const rows = users.map((user) => `<tr><td><strong>${esc(user.full_name || user.name || "—")}</strong></td><td>${esc(user.email || "—")}</td><td>${esc(user.phone || "—")}</td><td>${esc(ROLE_LABEL[user.role] || user.role || "—")}</td><td>${esc(user.function_name || "—")}</td><td>${esc(user.job_title || "—")}</td><td>${user.status === "active" ? "Ativo" : "Inativo"}</td><td>${user.auth_user_id ? "Login ativo" : "Sem login"}</td><td class="act table-actions-cell">${tableActionButtons({ edit: { className: "edit reg-user-edit", attrs: { "data-id": user.id }, title: "Editar usuário" } })}</td></tr>`).join("");
     root.innerHTML = `<div class="modal-toolbar"><span class="muted">${users.length} usuário(s)</span><button class="btn primary" id="registration-add">+ Usuário</button></div>
-      <div class="product-activity-list"><table><thead><tr><th>Usuário</th><th>E-mail</th><th>Telefone</th><th>Perfil</th><th>Função</th><th>Cargo</th><th>Status</th><th>Acesso</th><th>Ações</th></tr></thead><tbody>${rows || '<tr><td colspan="9" class="empty">Nenhum usuário cadastrado.</td></tr>'}</tbody></table></div>`;
+      <div class="product-activity-list"><table><thead><tr><th>Usuário</th><th>E-mail</th><th>Telefone</th><th>Perfil</th><th>Função</th><th>Cargo</th><th>Status</th><th>Acesso</th>${tableActionsHead()}</tr></thead><tbody>${rows || '<tr><td colspan="9" class="empty">Nenhum usuário cadastrado.</td></tr>'}</tbody></table></div>`;
     document.getElementById("registration-add")?.addEventListener("click", () => openUsersModal("new", true));
     root.querySelectorAll(".reg-user-edit").forEach((button) => button.addEventListener("click", () => openUsersModal(button.dataset.id, true)));
     wireRegistrationTable();
@@ -5935,10 +5981,17 @@ function renderRegistrationsSection() {
           <span><small>Produtos</small>${esc(childDetails.products)}</span>
           <span><small>Responsáveis</small>${esc(childDetails.owners)}</span>
           <span><small>Checklist</small>${checklist.length} item(ns)</span>
-          <span class="tool-row-actions"><button class="rowbtn reg-template-clone" data-id="${esc(child.item.id)}" data-product="${esc(child.item.product_id)}" title="Clonar subtarefa">⧉</button><button class="rowbtn edit reg-template-edit" data-id="${esc(child.item.id)}" data-product="${esc(child.item.product_id)}" title="Editar subtarefa">✎</button></span>
+          ${tableActionButtons({
+            edit: { className: "edit reg-template-edit", attrs: { "data-id": child.item.id, "data-product": child.item.product_id }, title: "Editar subtarefa" },
+            clone: { className: "reg-template-clone", attrs: { "data-id": child.item.id, "data-product": child.item.product_id }, title: "Clonar subtarefa" }
+          })}
         </div>`;
       }).join("");
-      return `<tr data-task-group="${esc(group.id)}"><td><span class="registration-task-name">${children.length ? `<button class="registration-task-toggle" data-group="${esc(group.id)}" title="${expanded ? "Recolher" : "Expandir"} subtarefas">${expanded ? "▾" : "▸"}</button>` : '<span class="registration-task-toggle-spacer"></span>'}<strong>${esc(activityDisplayName(item))}</strong><span class="registration-subtask-count">${children.length || ""}</span><span hidden>${esc(childNames)}</span></span></td><td>${esc(details.products)}</td><td>${esc(item.group || "—")}</td><td>${esc(item.sector || "—")}</td><td>${esc(item.channel || "—")}</td><td>${esc(item.type || "—")}</td><td>${priorityBadge(item.priority)}</td><td>${esc(RECURRENCE_LABEL[item.recurrence] || "Única")}</td><td>${esc(item.information || "—")}</td><td>${children.length ? '<span class="muted">Nas subtarefas</span>' : `${normalizeChecklist(item.checklist).length} item(ns)`}</td><td>${esc(details.objectives)}</td><td>${esc(details.owners)}</td><td>${esc(details.dependencies)}</td><td class="act"><button class="rowbtn reg-template-add-subtask" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Adicionar subtarefa">＋</button><button class="rowbtn reg-template-clone" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Clonar tarefa">⧉</button><button class="rowbtn edit reg-template-edit" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Editar tarefa">✎</button></td></tr>
+      return `<tr data-task-group="${esc(group.id)}"><td><span class="registration-task-name">${children.length ? `<button class="registration-task-toggle" data-group="${esc(group.id)}" title="${expanded ? "Recolher" : "Expandir"} subtarefas">${expanded ? "▾" : "▸"}</button>` : '<span class="registration-task-toggle-spacer"></span>'}<strong>${esc(activityDisplayName(item))}</strong><span class="registration-subtask-count">${children.length || ""}</span><span hidden>${esc(childNames)}</span></span></td><td>${esc(details.products)}</td><td>${esc(item.group || "—")}</td><td>${esc(item.sector || "—")}</td><td>${esc(item.channel || "—")}</td><td>${esc(item.type || "—")}</td><td>${priorityBadge(item.priority)}</td><td>${esc(RECURRENCE_LABEL[item.recurrence] || "Única")}</td><td>${esc(item.information || "—")}</td><td>${children.length ? '<span class="muted">Nas subtarefas</span>' : `${normalizeChecklist(item.checklist).length} item(ns)`}</td><td>${esc(details.objectives)}</td><td>${esc(details.owners)}</td><td>${esc(details.dependencies)}</td><td class="act table-actions-cell">${tableActionButtons({
+        open: children.length ? { className: "reg-template-open", attrs: { "data-group": group.id }, title: expanded ? "Recolher subtarefas" : "Abrir subtarefas" } : null,
+        edit: { className: "edit reg-template-edit", attrs: { "data-id": item.id, "data-product": item.product_id }, title: "Editar tarefa" },
+        clone: { className: "reg-template-clone", attrs: { "data-id": item.id, "data-product": item.product_id }, title: "Clonar tarefa" }
+      })}</td></tr>
         <tr class="registration-subtasks-container" data-parent-group="${esc(group.id)}"${expanded ? "" : " hidden"}><td colspan="14"><div class="registration-subtasks-list">${childRows}</div></td></tr>`;
     }).join("");
     root.innerHTML = registrationTemplateTable("tarefa", groups.size, "Tarefa", "<th>Produtos</th><th>Grupo</th><th>Setor</th><th>Canal</th><th>Tipo</th><th>Prioridade</th><th>Recorrência</th><th>Informação</th><th>Checklist</th><th>Objetivo</th><th>Responsáveis padrão</th><th>Depende de</th>", rows, 14);
@@ -5950,7 +6003,7 @@ function renderRegistrationsSection() {
         ...normalizeIdList(item.dependency_goal_template_ids).map((id) => items.find((goal) => goal.id === id)?.name),
         ...normalizeIdList(item.dependency_activity_template_ids).map((id) => activities.find((activity) => activity.id === id)).filter(Boolean).map(activityDisplayName)
       ].filter(Boolean).join(", ") || "—";
-      return `<tr><td><strong>${esc(item.name || "—")}</strong></td><td>${esc(registrationProductName(item.product_id))}</td><td>${esc(item.metric || "—")}</td><td>${esc(`${GOAL_COMPARISON_LABEL[item.comparison] || "No mínimo"} ${Number(item.target_value || 0).toLocaleString("pt-BR")} ${item.unit || ""}`.trim())}</td><td>${esc(dependencies)}</td><td>${esc(cache.userById[item.default_owner_id]?.full_name || cache.userById[item.default_owner_id]?.name || "—")}</td><td class="act"><button class="rowbtn edit reg-template-edit" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Editar meta">✎</button></td></tr>`;
+      return `<tr><td><strong>${esc(item.name || "—")}</strong></td><td>${esc(registrationProductName(item.product_id))}</td><td>${esc(item.metric || "—")}</td><td>${esc(`${GOAL_COMPARISON_LABEL[item.comparison] || "No mínimo"} ${Number(item.target_value || 0).toLocaleString("pt-BR")} ${item.unit || ""}`.trim())}</td><td>${esc(dependencies)}</td><td>${esc(cache.userById[item.default_owner_id]?.full_name || cache.userById[item.default_owner_id]?.name || "—")}</td><td class="act table-actions-cell">${tableActionButtons({ edit: { className: "edit reg-template-edit", attrs: { "data-id": item.id, "data-product": item.product_id }, title: "Editar meta" } })}</td></tr>`;
     }).join("");
     root.innerHTML = registrationTemplateTable("meta", items.length, "Meta", "<th>Produto</th><th>Indicador</th><th>Valor-alvo</th><th>Depende de</th><th>Responsável padrão</th>", rows, 7);
   } else {
@@ -5961,7 +6014,7 @@ function renderRegistrationsSection() {
         ...normalizeIdList(item.dependency_objective_template_ids).map((id) => items.find((objective) => objective.id === id)?.name),
         ...normalizeIdList(item.dependency_activity_template_ids).map((id) => activities.find((activity) => activity.id === id)).filter(Boolean).map(activityDisplayName)
       ].filter(Boolean).join(", ") || "—";
-      return `<tr><td><strong>${esc(item.name || "—")}</strong></td><td>${esc(registrationProductName(item.product_id))}</td><td>${esc(item.completion_criteria || "—")}</td><td>${esc(dependencies)}</td><td>${item.target_days == null ? "—" : `${esc(item.target_days)} dia(s)`}</td><td>${esc(cache.userById[item.default_owner_id]?.full_name || cache.userById[item.default_owner_id]?.name || "—")}</td><td class="act"><button class="rowbtn edit reg-template-edit" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Editar objetivo">✎</button></td></tr>`;
+      return `<tr><td><strong>${esc(item.name || "—")}</strong></td><td>${esc(registrationProductName(item.product_id))}</td><td>${esc(item.completion_criteria || "—")}</td><td>${esc(dependencies)}</td><td>${item.target_days == null ? "—" : `${esc(item.target_days)} dia(s)`}</td><td>${esc(cache.userById[item.default_owner_id]?.full_name || cache.userById[item.default_owner_id]?.name || "—")}</td><td class="act table-actions-cell">${tableActionButtons({ edit: { className: "edit reg-template-edit", attrs: { "data-id": item.id, "data-product": item.product_id }, title: "Editar objetivo" } })}</td></tr>`;
     }).join("");
     root.innerHTML = registrationTemplateTable("objetivo", items.length, "Objetivo", "<th>Produto</th><th>Critério de conclusão</th><th>Depende de</th><th>Prazo sugerido</th><th>Responsável padrão</th>", rows, 7);
   }
@@ -5992,6 +6045,8 @@ function renderRegistrationsSection() {
     button.textContent = container.hidden ? "▸" : "▾";
     button.title = container.hidden ? "Expandir subtarefas" : "Recolher subtarefas";
   }));
+  root.querySelectorAll(".reg-template-open").forEach((button) => button.addEventListener("click", () =>
+    root.querySelector(`.registration-task-toggle[data-group="${CSS.escape(button.dataset.group)}"]`)?.click()));
   root.querySelectorAll(".reg-template-clone").forEach((button) => button.addEventListener("click", () => {
     productActivityState = { productId: button.dataset.product, editId: null, objectiveEditId: null, goalEditId: null, tab: "activities" };
     openProductActivityDrawer(null, button.dataset.id);
@@ -6290,7 +6345,7 @@ function openRegistrationColumnFilter(header, table, key) {
 
 function registrationTemplateTable(singular, count, firstColumn, extraHeaders, rows, colspan) {
   return `<div class="modal-toolbar"><span class="muted">${count} ${singular}(s) cadastrada(s) nos produtos</span><button class="btn primary" id="registration-add">+ ${firstColumn}</button></div>
-    <div class="product-activity-list"><table><thead><tr><th>${firstColumn}</th>${extraHeaders}<th>Ações</th></tr></thead><tbody>${rows || `<tr><td colspan="${colspan}" class="empty">Nenhum registro cadastrado.</td></tr>`}</tbody></table></div>`;
+    <div class="product-activity-list"><table><thead><tr><th>${firstColumn}</th>${extraHeaders}${tableActionsHead()}</tr></thead><tbody>${rows || `<tr><td colspan="${colspan}" class="empty">Nenhum registro cadastrado.</td></tr>`}</tbody></table></div>`;
 }
 
 function openRegistrationTemplateEditor(section, productId, itemId = null) {
@@ -6602,14 +6657,14 @@ function renderGoogleContactsPreview() {
     return `<tr><td class="select-cell"><input class="google-contact-check" type="checkbox" data-index="${index}" checked></td>
       <td>${esc(mapped.name)}</td><td>${esc(mapped.email || "—")}</td><td>${esc(mapped.phone || "—")}</td><td>${esc(mapped.job_title || "—")}</td>
       <td>${esc(company.trade_name || "—")}</td><td>${esc(company.legal_name || "—")}</td><td>${esc(company.tax_id || "—")}</td>
-      <td>${existing ? '<span class="badge b-lead">Atualizar</span>' : '<span class="badge b-open">Novo</span>'}</td></tr>`;
+      <td>${existing ? '<span class="badge b-lead">Atualizar</span>' : '<span class="badge b-open">Novo</span>'}</td><td class="table-actions-cell">${tableActionButtons()}</td></tr>`;
   }).join("");
   shell("Importar contatos do Google", `<div class="google-import-head">
       <div><strong>${esc(googleContactsState.account?.email || "Conta Google")}</strong><div class="muted">${people.length} contato(s) encontrado(s)</div></div>
       <label class="google-select-all"><input type="checkbox" id="google-select-all" checked> Selecionar todos</label>
     </div>
     <div class="google-import-fields"><strong>Dados importados</strong><span>Nome, e-mails, telefones, cargo, empresa, razão social, CNPJ, nascimento e redes sociais disponíveis no contato Google.</span></div>
-    <div class="google-contact-list"><table><thead><tr><th></th><th>Nome</th><th>E-mail(s)</th><th>Telefone(s)</th><th>Cargo</th><th>Nome fantasia</th><th>Razão social</th><th>CNPJ</th><th>Situação</th></tr></thead><tbody>${rows || '<tr><td colspan="9" class="empty">Nenhum contato encontrado.</td></tr>'}</tbody></table></div>
+    <div class="google-contact-list"><table><thead><tr><th></th><th>Nome</th><th>E-mail(s)</th><th>Telefone(s)</th><th>Cargo</th><th>Nome fantasia</th><th>Razão social</th><th>CNPJ</th><th>Situação</th>${tableActionsHead()}</tr></thead><tbody>${rows || '<tr><td colspan="10" class="empty">Nenhum contato encontrado.</td></tr>'}</tbody></table></div>
     <div class="modal-foot"><button class="btn" id="google-import-cancel">Cancelar</button><button class="btn primary" id="google-import-confirm"${people.length ? "" : " disabled"}>Importar selecionados</button></div>`, { cls: "full" });
   document.getElementById("google-select-all")?.addEventListener("change", (event) => {
     document.querySelectorAll(".google-contact-check").forEach((input) => { input.checked = event.target.checked; });
@@ -7003,9 +7058,13 @@ function renderToolFolders(root) {
       }
       return `<td>${esc(toolFileValue(file, col.k))}</td>`;
     }).join("")}
-    <td><span class="tool-row-actions">${safeHttpUrl(file.file_reference) ? `<button class="tool-icon-btn tool-folder-open" data-id="${esc(file.id)}" title="Abrir arquivo">↗</button>` : ""}${currentUserIsAdmin() ? `<button class="tool-icon-btn tool-folder-edit" data-id="${esc(file.id)}" title="Editar arquivo">✎</button><button class="tool-icon-btn tool-folder-delete" data-id="${esc(file.id)}" title="Excluir arquivo">×</button>` : ""}</span></td>
+    <td class="table-actions-cell">${tableActionButtons({
+      open: safeHttpUrl(file.file_reference) ? { className: "tool-folder-open", attrs: { "data-id": file.id }, title: "Abrir arquivo" } : null,
+      edit: currentUserIsAdmin() ? { className: "tool-folder-edit", attrs: { "data-id": file.id }, title: "Editar arquivo" } : null,
+      delete: currentUserIsAdmin() ? { className: "tool-folder-delete", attrs: { "data-id": file.id }, title: "Excluir arquivo" } : null
+    })}</td>
   </tr>`).join("") : `<tr><td colspan="${columns.length + 1}" class="tool-empty">Nenhum arquivo cadastrado.</td></tr>`;
-  root.innerHTML = `${toolsToolbarHtml(files.length, "Adicionar arquivo", "tool-folder-add", currentUserIsAdmin(), "Buscar empresa...")}${toolFilterStrip("files", tableState, { loading: remoteToolFilesLoading, error: remoteToolFilesError })}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>${toolsPaginationHtml(files.length, "files")}`;
+  root.innerHTML = `${toolsToolbarHtml(files.length, "Adicionar arquivo", "tool-folder-add", currentUserIsAdmin(), "Buscar empresa...")}${toolFilterStrip("files", tableState, { loading: remoteToolFilesLoading, error: remoteToolFilesError })}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}${tableActionsHead()}</tr></thead><tbody>${rows}</tbody></table></div>${toolsPaginationHtml(files.length, "files")}`;
   wireToolsToolbar(root);
   wireToolsPagination(root, "files");
   wireToolsLoadRetry(root, "files");
@@ -7217,9 +7276,13 @@ function renderToolProcesses(root) {
       if (col.k === "steps") return `<td>${normalizeProcessSteps(process.steps).length} etapa(s)</td>`;
       return `<td>${esc(toolProcessValue(process, col.k))}</td>`;
     }).join("")}
-    <td><span class="tool-row-actions"><button class="tool-icon-btn tool-process-flow" data-id="${esc(process.id)}" title="Ver fluxo visual">⇢</button><button class="tool-icon-btn tool-process-open" data-id="${esc(process.id)}" title="Abrir processo">◉</button>${currentUserIsAdmin() ? `<button class="tool-icon-btn tool-process-edit" data-id="${esc(process.id)}" title="Editar processo">✎</button><button class="tool-icon-btn tool-process-delete" data-id="${esc(process.id)}" title="Excluir processo">×</button>` : ""}</span></td>
+    <td class="table-actions-cell">${tableActionButtons({
+      open: { className: "tool-process-flow", attrs: { "data-id": process.id }, title: "Abrir fluxo visual" },
+      edit: currentUserIsAdmin() ? { className: "tool-process-edit", attrs: { "data-id": process.id }, title: "Editar processo" } : null,
+      delete: currentUserIsAdmin() ? { className: "tool-process-delete", attrs: { "data-id": process.id }, title: "Excluir processo" } : null
+    })}</td>
   </tr>`).join("") : `<tr><td colspan="${columns.length + 1}" class="tool-empty">Nenhum processo cadastrado.</td></tr>`;
-  root.innerHTML = `${toolsToolbarHtml(processes.length, "Adicionar processo", "tool-process-add", currentUserIsAdmin())}${toolFilterStrip("processes", tableState, { loading: remoteToolProcessesLoading, error: remoteToolProcessesError })}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>${toolsPaginationHtml(processes.length, "processes")}`;
+  root.innerHTML = `${toolsToolbarHtml(processes.length, "Adicionar processo", "tool-process-add", currentUserIsAdmin())}${toolFilterStrip("processes", tableState, { loading: remoteToolProcessesLoading, error: remoteToolProcessesError })}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}${tableActionsHead()}</tr></thead><tbody>${rows}</tbody></table></div>${toolsPaginationHtml(processes.length, "processes")}`;
   wireToolsToolbar(root);
   wireToolsPagination(root, "processes");
   wireToolsLoadRetry(root, "processes");
@@ -7353,9 +7416,13 @@ function renderToolDocuments(root) {
       if (col.k === "tags") return `<td><span class="tool-tags">${normalizeTextList(documentItem.tags).map((tag) => `<span class="tool-tag">${esc(tag)}</span>`).join("") || '<span class="muted">—</span>'}</span></td>`;
       return `<td>${esc(toolDocumentValue(documentItem, col.k))}</td>`;
     }).join("")}
-    <td><span class="tool-row-actions"><button class="tool-icon-btn tool-document-open" data-id="${esc(documentItem.id)}" title="Abrir documentação">◉</button>${currentUserIsAdmin() ? `<button class="tool-icon-btn tool-document-edit" data-id="${esc(documentItem.id)}" title="Editar documentação">✎</button><button class="tool-icon-btn tool-document-delete" data-id="${esc(documentItem.id)}" title="Excluir documentação">×</button>` : ""}</span></td>
+    <td class="table-actions-cell">${tableActionButtons({
+      open: { className: "tool-document-open", attrs: { "data-id": documentItem.id }, title: "Abrir documentação" },
+      edit: currentUserIsAdmin() ? { className: "tool-document-edit", attrs: { "data-id": documentItem.id }, title: "Editar documentação" } : null,
+      delete: currentUserIsAdmin() ? { className: "tool-document-delete", attrs: { "data-id": documentItem.id }, title: "Excluir documentação" } : null
+    })}</td>
   </tr>`).join("") : `<tr><td colspan="${columns.length + 1}" class="tool-empty">Nenhuma documentação cadastrada.</td></tr>`;
-  root.innerHTML = `${toolsToolbarHtml(documents.length, "Adicionar documentação", "tool-document-add", currentUserIsAdmin())}${toolFilterStrip("documents", tableState, { loading: remoteToolDocumentsLoading, error: remoteToolDocumentsError })}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>${toolsPaginationHtml(documents.length, "documents")}`;
+  root.innerHTML = `${toolsToolbarHtml(documents.length, "Adicionar documentação", "tool-document-add", currentUserIsAdmin())}${toolFilterStrip("documents", tableState, { loading: remoteToolDocumentsLoading, error: remoteToolDocumentsError })}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}${tableActionsHead()}</tr></thead><tbody>${rows}</tbody></table></div>${toolsPaginationHtml(documents.length, "documents")}`;
   wireToolsToolbar(root);
   wireToolsPagination(root, "documents");
   wireToolsLoadRetry(root, "documents");
@@ -7948,10 +8015,13 @@ function renderToolEmails(root) {
       if (col.k === "tags") return `<td><span class="tool-tags">${(account.tags || []).map((tag) => `<span class="tool-tag">${esc(tag)}</span>`).join("") || '<span class="muted">—</span>'}</span></td>`;
       return `<td>${esc(account[col.k] || "—")}</td>`;
     }).join("")}
-    <td><span class="tool-row-actions"><button class="tool-icon-btn tool-email-edit" data-id="${esc(account.id)}" title="Editar senha local e tags">✎</button>${usesServer ? "" : `<button class="tool-icon-btn tool-email-delete" data-id="${esc(account.id)}" title="Excluir">×</button>`}</span></td>
+    <td class="table-actions-cell">${tableActionButtons({
+      edit: { className: "tool-email-edit", attrs: { "data-id": account.id }, title: "Editar senha local e tags" },
+      delete: !usesServer ? { className: "tool-email-delete", attrs: { "data-id": account.id }, title: "Excluir e-mail" } : null
+    })}</td>
   </tr>`).join("") : `<tr><td colspan="${columns.length + 1}" class="tool-empty">Nenhum e-mail cadastrado.</td></tr>`;
   const filterStrip = toolFilterStrip("emails", tableState, { loading: usesServer && remoteToolEmailsLoading, error: usesServer ? remoteToolEmailsError : "" });
-  root.innerHTML = `${toolsToolbarHtml(accounts.length, "Criar e-mail pelo CNPJ", "tool-email-add")}${filterStrip}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>${toolsPaginationHtml(accounts.length, "emails")}`;
+  root.innerHTML = `${toolsToolbarHtml(accounts.length, "Criar e-mail pelo CNPJ", "tool-email-add")}${filterStrip}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}${tableActionsHead()}</tr></thead><tbody>${rows}</tbody></table></div>${toolsPaginationHtml(accounts.length, "emails")}`;
   wireToolsToolbar(root);
   wireToolsPagination(root, "emails");
   wireToolsLoadRetry(root, "emails");
@@ -8196,9 +8266,9 @@ function openAdminLog() {
     }))
   ).filter((item) => item.at).sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 100);
   const body = rows.length
-    ? rows.map((item) => `<tr><td>${esc(item.type)}</td><td><strong>${esc(item.name)}</strong></td><td>${esc(new Date(item.at).toLocaleString("pt-BR"))}</td></tr>`).join("")
-    : '<tr><td colspan="3" class="empty">Nenhuma alteração registrada.</td></tr>';
-  shell("Log · Alterações recentes", `<div class="table-wrap"><table><thead><tr><th>Tipo</th><th>Registro</th><th>Data</th></tr></thead><tbody>${body}</tbody></table></div>
+    ? rows.map((item) => `<tr><td>${esc(item.type)}</td><td><strong>${esc(item.name)}</strong></td><td>${esc(new Date(item.at).toLocaleString("pt-BR"))}</td><td class="table-actions-cell">${tableActionButtons()}</td></tr>`).join("")
+    : '<tr><td colspan="4" class="empty">Nenhuma alteração registrada.</td></tr>';
+  shell("Log · Alterações recentes", `<div class="table-wrap"><table><thead><tr><th>Tipo</th><th>Registro</th><th>Data</th>${tableActionsHead()}</tr></thead><tbody>${body}</tbody></table></div>
     <div class="modal-foot"><button class="btn" id="log-close">Fechar</button></div>`, { cls: "wide" });
   document.getElementById("log-close").addEventListener("click", closeModal);
 }

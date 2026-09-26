@@ -249,6 +249,23 @@
   .multi-value span{display:block;padding:1px 0}
   td.num{font-variant-numeric:tabular-nums; text-align:right}
   td.act{text-align:right;width:1%;padding-left:8px;padding-right:10px}
+  .table-actions-head,.table-actions-cell{position:sticky!important;right:0;z-index:4;min-width:136px!important;width:136px!important;box-sizing:border-box;background:var(--panel);box-shadow:-8px 0 14px rgba(0,0,0,.12);text-align:center!important}
+  thead .table-actions-head{z-index:8;background:var(--panel2)}
+  tbody tr:nth-child(even) .table-actions-cell{background:var(--row-alt)}
+  tbody tr:hover .table-actions-cell{background:var(--row-hover)}
+  .table-actions{display:grid;grid-template-columns:repeat(4,28px);align-items:center;justify-content:end;gap:3px;width:121px;margin-left:auto}
+  .table-action-btn{display:inline-flex;width:28px!important;height:28px!important;align-items:center;justify-content:center;padding:5px!important;border:1px solid currentColor!important;border-radius:5px;background:transparent!important}
+  .table-action-btn svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .table-action-btn.action-open{color:#13b8cf}
+  .table-action-btn.action-edit{color:#4b8df8}
+  .table-action-btn.action-clone{color:#a98cf5}
+  .table-action-btn.action-delete{color:#ef5a67}
+  .table-action-btn:not(:disabled):hover{background:color-mix(in srgb,currentColor 13%,transparent)!important;filter:brightness(1.18)}
+  .table-action-btn.is-disabled,.table-action-btn:disabled{color:var(--muted)!important;opacity:.28;cursor:default;filter:none;pointer-events:none}
+  body.light .table-action-btn.action-open{color:#087b91}
+  body.light .table-action-btn.action-edit{color:#1f61c9}
+  body.light .table-action-btn.action-clone{color:#7047bd}
+  body.light .table-action-btn.action-delete{color:#bd3442}
   .data-table .action-col{position:sticky;right:0;z-index:3;background:var(--panel);box-shadow:-8px 0 14px rgba(0,0,0,.12)}
   .data-table thead .action-col{z-index:6;background:var(--panel2)}
   .data-table tbody tr:nth-child(even) .action-col{background:var(--row-alt)}

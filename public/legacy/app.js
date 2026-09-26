@@ -522,6 +522,7 @@ function productActivityRemoteBody(template) {
   return {
     id: template.id,
     product_id: template.product_id,
+    parent_template_id: template.parent_template_id || null,
     depends_on_template_id: template.depends_on_template_id || null,
     dependency_template_ids: normalizeIdList(template.dependency_template_ids, template.depends_on_template_id),
     group: template.group || null,
@@ -733,6 +734,7 @@ async function syncProductActivities() {
   let changed = false;
   for (const project of cache.projects || []) {
     for (const template of templates.filter((item) => item.product_id === project.product_id)) {
+      const hasSubtasks = templates.some((item) => item.parent_template_id === template.id);
       const objective = template.objective_template_id
         ? loadDeliveryObjectives().find((item) => item.project_id === project.id && item.source_template_id === template.objective_template_id)
         : null;
@@ -758,7 +760,7 @@ async function syncProductActivities() {
         };
         if (current) {
           const recurrenceChanged = (current.recurrence || "once") !== structural.recurrence;
-          const updates = { ...structural, checklist: mergeTemplateChecklist(template.checklist, current.checklist) };
+          const updates = { ...structural, checklist: hasSubtasks ? [] : mergeTemplateChecklist(template.checklist, current.checklist) };
           const defaultAssignees = normalizeIdList(template.default_assignee_ids, template.default_owner_id);
           if (!normalizeIdList(current.assignee_ids, current.owner_id).length && defaultAssignees.length) {
             updates.assignee_ids = defaultAssignees;
@@ -781,7 +783,7 @@ async function syncProductActivities() {
         const now = new Date().toISOString();
         const body = {
           id: crypto.randomUUID(), project_id: project.id, source_template_id: template.id,
-          ...structural, checklist: mergeTemplateChecklist(template.checklist, []),
+          ...structural, checklist: hasSubtasks ? [] : mergeTemplateChecklist(template.checklist, []),
           owner_id: normalizeIdList(template.default_assignee_ids, template.default_owner_id)[0] || null,
           assignee_ids: normalizeIdList(template.default_assignee_ids, template.default_owner_id),
           assignee_job_titles: normalizeTextList(template.default_assignee_job_titles),
@@ -800,21 +802,29 @@ async function syncProductActivities() {
     for (const template of projectTemplates) {
       const occurrences = tasks.filter((task) => task.project_id === project.id && task.source_template_id === template.id).sort(activityOccurrenceSort);
       const dependencyTemplateIds = normalizeIdList(template.dependency_template_ids, template.depends_on_template_id);
+      const parentOccurrences = template.parent_template_id
+        ? tasks.filter((task) => task.project_id === project.id && task.source_template_id === template.parent_template_id).sort(activityOccurrenceSort)
+        : [];
       for (let index = 0; index < occurrences.length; index += 1) {
         const current = occurrences[index];
         const occurrenceIndex = Number(current.occurrence_index || 0);
+        const parentId = parentOccurrences.find((task) => Number(task.occurrence_index || 0) === occurrenceIndex)?.id
+          || parentOccurrences[Math.min(index, parentOccurrences.length - 1)]?.id
+          || null;
         const dependencyIds = dependencyTemplateIds.map((templateId) => {
           const dependencyOccurrences = tasks.filter((task) => task.project_id === project.id && task.source_template_id === templateId).sort(activityOccurrenceSort);
           return dependencyOccurrences.find((task) => Number(task.occurrence_index || 0) === occurrenceIndex)?.id
             || dependencyOccurrences[Math.min(index, dependencyOccurrences.length - 1)]?.id;
         }).filter(Boolean);
         const dependencyId = dependencyIds[0] || null;
-        if ((current.depends_on_activity_id || null) === dependencyId
+        if ((current.parent_activity_id || null) === parentId
+          && (current.depends_on_activity_id || null) === dependencyId
           && JSON.stringify(normalizeIdList(current.dependency_ids, current.depends_on_activity_id)) === JSON.stringify(dependencyIds)) continue;
+        current.parent_activity_id = parentId;
         current.depends_on_activity_id = dependencyId;
         current.dependency_ids = dependencyIds;
         current.updated_at = new Date().toISOString();
-        if (isLive()) await updateRow("activities", current.id, { depends_on_activity_id: dependencyId, dependency_ids: dependencyIds });
+        if (isLive()) await updateRow("activities", current.id, { parent_activity_id: parentId, depends_on_activity_id: dependencyId, dependency_ids: dependencyIds });
         changed = true;
       }
     }
@@ -2139,6 +2149,25 @@ let productActivityState = { productId: null, editId: null, objectiveEditId: nul
 let productActivityChecklistDraft = [];
 let productActivityRelatedIds = [];
 let productActivityDraftGroupId = null;
+let productActivityParentGroupId = null;
+const registrationExpandedTaskGroups = new Set();
+
+function productTemplateSubtasks(templateId, templates = loadProductActivities()) {
+  return templates.filter((item) => item.parent_template_id === templateId);
+}
+
+function productTemplateParent(template, templates = loadProductActivities()) {
+  return template?.parent_template_id ? templates.find((item) => item.id === template.parent_template_id) || null : null;
+}
+
+function productTemplateDescendantIds(templateId, templates = loadProductActivities(), ids = new Set()) {
+  productTemplateSubtasks(templateId, templates).forEach((item) => {
+    if (ids.has(item.id)) return;
+    ids.add(item.id);
+    productTemplateDescendantIds(item.id, templates, ids);
+  });
+  return ids;
+}
 
 function productActivityIdentity(item) {
   return [item?.group, item?.sector, item?.channel, item?.type, item?.activity, item?.recurrence || "once"]
@@ -2202,20 +2231,24 @@ function renderProductWorkspace() {
 function renderProductActivities() {
   const root = document.getElementById("product-activities-root");
   if (!root) return;
-  const templates = loadProductActivities()
-    .filter((item) => item.product_id === productActivityState.productId)
-    .sort((a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || String(a.created_at || "").localeCompare(String(b.created_at || "")));
-  const rows = templates.map((item) => `<tr class="pa-row" data-id="${esc(item.id)}" draggable="true">
+  const productTemplates = loadProductActivities().filter((item) => item.product_id === productActivityState.productId);
+  const compareTemplates = (a, b) => Number(a.sort_order || 0) - Number(b.sort_order || 0) || String(a.created_at || "").localeCompare(String(b.created_at || ""));
+  const productTemplateIds = new Set(productTemplates.map((item) => item.id));
+  const templates = productTemplates.filter((item) => !item.parent_template_id || !productTemplateIds.has(item.parent_template_id))
+    .sort(compareTemplates)
+    .flatMap((item) => [item, ...productTemplateSubtasks(item.id, productTemplates).sort(compareTemplates)]);
+  const rows = templates.map((item) => `<tr class="pa-row${item.parent_template_id ? " pa-subtask-row" : ""}" data-id="${esc(item.id)}" draggable="true">
     <td class="pa-drag" title="Arraste para mudar a ordem">⠿</td>
     <td>${esc(item.group || "—")}</td><td>${esc(item.sector || "—")}</td>
     <td>${esc(item.channel || "—")}</td><td>${esc(item.type || "—")}</td><td>${esc(RECURRENCE_LABEL[item.recurrence] || "Única")}</td>
-    <td>${esc(activityDisplayName(item))}</td><td>${esc(item.information || "—")}</td>
-    <td>${normalizeChecklist(item.checklist).length} item(ns)</td>
+    <td>${item.parent_template_id ? '<span class="task-subtask-branch">↳</span> ' : ""}${esc(activityDisplayName(item))}</td><td>${esc(item.information || "—")}</td>
+    <td>${productTemplateSubtasks(item.id, productTemplates).length ? '<span class="muted">Nas subtarefas</span>' : `${normalizeChecklist(item.checklist).length} item(ns)`}</td>
     <td>${esc(loadProductObjectives().find((objective) => objective.id === item.objective_template_id)?.name || "—")}</td>
     <td>${priorityBadge(item.priority)}</td>
     <td>${esc(responsibilityNames(item.default_assignee_ids, item.default_owner_id, item.default_assignee_job_titles))}</td>
     <td>${esc(dependencyNames(item.dependency_template_ids, item.depends_on_template_id, templates))}</td>
     <td class="act">
+      ${item.parent_template_id ? "" : `<button class="rowbtn pa-add-subtask" data-id="${esc(item.id)}" title="Adicionar subtarefa">＋</button>`}
       <button class="rowbtn pa-delete" data-id="${esc(item.id)}" title="Desvincular do produto">✕</button>
     </td></tr>`).join("");
   root.innerHTML = `<div class="modal-toolbar"><span class="muted">${templates.length} tarefa(s) vinculada(s)</span><div class="modal-toolbar-actions"><button class="btn primary" id="pa-ready">Vincular tarefas</button></div></div>
@@ -2223,29 +2256,41 @@ function renderProductActivities() {
       <th class="noclick"></th><th>Grupo</th><th>Setor</th><th>Canal</th><th>Tipo</th><th>Recorrência</th><th>Tarefa</th><th>Informação</th><th>Checklist</th><th>Objetivo</th><th>Prioridade</th><th>Responsáveis padrão</th><th>Depende de</th><th>Ações</th>
     </tr></thead><tbody id="pa-tbody">${rows || '<tr><td colspan="14" class="empty">Nenhuma tarefa cadastrada para este produto.</td></tr>'}</tbody></table></div>`;
   document.getElementById("pa-ready").addEventListener("click", openReadyActivityPicker);
+  document.querySelectorAll(".pa-add-subtask").forEach((button) => button.addEventListener("click", () =>
+    openProductActivityDrawer(null, null, button.dataset.id)));
   document.querySelectorAll(".pa-delete").forEach((button) => button.addEventListener("click", async () => {
     if (!window.confirm("Desvincular esta tarefa do produto? Entregas que já receberam a tarefa manterão a cópia existente.")) return;
     try {
+       const allTemplates = loadProductActivities();
+       const currentTemplate = allTemplates.find((item) => item.id === button.dataset.id);
+       const removedIds = new Set([button.dataset.id, ...productTemplateDescendantIds(button.dataset.id, allTemplates)]);
+       const parentTemplate = productTemplateParent(currentTemplate, allTemplates);
+       const siblings = parentTemplate ? productTemplateSubtasks(parentTemplate.id, allTemplates).filter((item) => item.id !== button.dataset.id) : [];
+       if (parentTemplate && !siblings.length) {
+         const changes = { checklist: normalizeChecklist(currentTemplate.checklist), updated_at: new Date().toISOString() };
+         if (isLive()) await updateRow("productActivities", parentTemplate.id, changes);
+         Object.assign(parentTemplate, changes);
+       }
        if (isLive()) {
-         const dependents = cache.productActivities.filter((item) => normalizeIdList(item.dependency_template_ids, item.depends_on_template_id).includes(button.dataset.id));
+         const dependents = cache.productActivities.filter((item) => normalizeIdList(item.dependency_template_ids, item.depends_on_template_id).some((id) => removedIds.has(id)));
          for (const item of dependents) {
-           item.dependency_template_ids = normalizeIdList(item.dependency_template_ids, item.depends_on_template_id).filter((id) => id !== button.dataset.id);
+           item.dependency_template_ids = normalizeIdList(item.dependency_template_ids, item.depends_on_template_id).filter((id) => !removedIds.has(id));
            item.depends_on_template_id = item.dependency_template_ids[0] || null;
            await updateRow("productActivities", item.id, { dependency_template_ids: item.dependency_template_ids, depends_on_template_id: item.depends_on_template_id });
          }
          await deleteRow("productActivities", button.dataset.id);
-         cache.productActivities = cache.productActivities.filter((item) => item.id !== button.dataset.id);
+         cache.productActivities = cache.productActivities.filter((item) => !removedIds.has(item.id));
        } else {
-         const remaining = loadProductActivities().filter((item) => item.id !== button.dataset.id);
+         const remaining = allTemplates.filter((item) => !removedIds.has(item.id));
          remaining.forEach((item) => {
-           item.dependency_template_ids = normalizeIdList(item.dependency_template_ids, item.depends_on_template_id).filter((id) => id !== button.dataset.id);
+           item.dependency_template_ids = normalizeIdList(item.dependency_template_ids, item.depends_on_template_id).filter((id) => !removedIds.has(id));
            item.depends_on_template_id = item.dependency_template_ids[0] || null;
          });
          saveProductActivities(remaining);
       }
       const tasks = loadProjectTasks();
       tasks.forEach((task) => {
-        if (task.source_template_id === button.dataset.id) task.source_template_id = null;
+        if (removedIds.has(task.source_template_id)) task.source_template_id = null;
       });
       if (isLive()) cache.activityRecords = tasks;
       else saveProjectTasks(tasks);
@@ -2610,6 +2655,7 @@ function openReadyActivityPicker() {
       visited.add(sourceId);
       const source = rows.find((item) => item.id === sourceId);
       if (!source) return;
+      if (source.parent_template_id) visitSource(source.parent_template_id);
       normalizeIdList(source.dependency_template_ids, source.depends_on_template_id).forEach(visitSource);
       orderedSources.push(source);
     };
@@ -2651,6 +2697,7 @@ function openReadyActivityPicker() {
         const now = new Date().toISOString();
         const draft = {
           ...source, id: activityMap.get(source.id), product_id: productActivityState.productId,
+          parent_template_id: activityMap.get(source.parent_template_id) || null,
           dependency_template_ids: normalizeIdList(source.dependency_template_ids, source.depends_on_template_id).map((id) => activityMap.get(id)).filter(Boolean),
           depends_on_template_id: normalizeIdList(source.dependency_template_ids, source.depends_on_template_id).map((id) => activityMap.get(id)).filter(Boolean)[0] || null,
           objective_template_id: objectiveMap.get(source.objective_template_id) || null,
@@ -2744,15 +2791,37 @@ function closeProductActivityDrawer() {
   productActivityState.editId = null;
   productActivityState.objectiveEditId = null;
   productActivityState.goalEditId = null;
+  productActivityParentGroupId = null;
 }
 
-function openProductActivityDrawer(editId = null, cloneSourceId = null) {
+function openProductActivityDrawer(editId = null, cloneSourceId = null, parentTemplateId = null) {
   closeProductActivityDrawer();
   productActivityState.editId = editId;
-  const templates = loadProductActivities().filter((item) => item.product_id === productActivityState.productId);
+  const allTemplates = loadProductActivities();
+  const templates = allTemplates.filter((item) => item.product_id === productActivityState.productId);
   const editing = templates.find((item) => item.id === editId) || null;
   const cloneSource = templates.find((item) => item.id === cloneSourceId) || null;
   const current = editing || (cloneSource ? { ...cloneSource, id: null, activity: `${cloneSource.activity} (cópia)` } : {});
+  const requestedParent = allTemplates.find((item) => item.id === (editing?.parent_template_id || cloneSource?.parent_template_id || parentTemplateId)) || null;
+  if (requestedParent?.parent_template_id) {
+    toast("Uma subtarefa não pode receber outra subtarefa.", true);
+    return;
+  }
+  if (!editing && !cloneSource && requestedParent) {
+    Object.assign(current, {
+      group: requestedParent.group || "",
+      sector: requestedParent.sector || "",
+      channel: requestedParent.channel || "",
+      type: requestedParent.type || "",
+      recurrence: requestedParent.recurrence || "once",
+      priority: requestedParent.priority || "normal",
+      objective_template_id: requestedParent.objective_template_id || null,
+      default_owner_id: requestedParent.default_owner_id || null,
+      default_assignee_ids: normalizeIdList(requestedParent.default_assignee_ids, requestedParent.default_owner_id),
+      default_assignee_job_titles: normalizeTextList(requestedParent.default_assignee_job_titles)
+    });
+  }
+  productActivityParentGroupId = requestedParent ? (requestedParent.template_group_id || requestedParent.id) : null;
   productActivityDraftGroupId = editing?.template_group_id || crypto.randomUUID();
   productActivityRelatedIds = editing
     ? loadProductActivities().filter((item) => item.template_group_id
@@ -2761,8 +2830,11 @@ function openProductActivityDrawer(editId = null, cloneSourceId = null) {
     : [];
   const selectedProductIds = new Set(editing
     ? loadProductActivities().filter((item) => productActivityRelatedIds.includes(item.id)).map((item) => item.product_id)
-    : [productActivityState.productId]);
-  productActivityChecklistDraft = normalizeChecklist(current.checklist).map((item) => ({ ...item, checked: false }));
+    : requestedParent
+      ? allTemplates.filter((item) => (item.template_group_id || item.id) === productActivityParentGroupId).map((item) => item.product_id)
+      : [productActivityState.productId]);
+  const hasSubtasks = editing && allTemplates.some((item) => productActivityRelatedIds.includes(item.parent_template_id));
+  productActivityChecklistDraft = normalizeChecklist(current.checklist || requestedParent?.checklist).map((item) => ({ ...item, checked: false }));
   const selectedDependencies = new Set(normalizeIdList(current.dependency_template_ids, current.depends_on_template_id));
   const dependencyOptions = templates.filter((item) => item.id !== editId).map((item) => ({ value: item.id, label: activityDisplayName(item) }));
   const selectedAssignees = new Set(normalizeIdList(current.default_assignee_ids, current.default_owner_id));
@@ -2781,8 +2853,9 @@ function openProductActivityDrawer(editId = null, cloneSourceId = null) {
   overlay.id = "product-activity-drawer-overlay";
   overlay.className = "activity-form-overlay";
   overlay.innerHTML = `<aside class="activity-form-drawer">
-    <h3>${current.id ? "Editar tarefa" : cloneSource ? "Clonar tarefa" : "Nova tarefa"}<button class="modal-close-x" id="pa-close" title="Fechar">✕</button></h3>
+    <h3>${current.id ? (productActivityParentGroupId ? "Editar subtarefa" : "Editar tarefa") : cloneSource ? "Clonar tarefa" : productActivityParentGroupId ? "Nova subtarefa" : "Nova tarefa"}<button class="modal-close-x" id="pa-close" title="Fechar">✕</button></h3>
     <div class="form product-activity-form">
+      ${requestedParent ? `<div class="field"><label>Tarefa principal</label><input value="${esc(activityDisplayName(requestedParent))}" disabled></div>` : ""}
       <div class="field"><label>Produtos *</label>${multiPickerHtml("pa-products", productOptions, selectedProductIds, "Selecionar produtos")}</div>
       <div class="field"><label>Grupo</label><input id="pa-group" value="${esc(current.group || "")}"></div>
       <div class="field"><label>Setor</label><input id="pa-sector" value="${esc(current.sector || "")}"></div>
@@ -2790,22 +2863,23 @@ function openProductActivityDrawer(editId = null, cloneSourceId = null) {
       <div class="field"><label>Tipo</label><input id="pa-type" value="${esc(current.type || "")}"></div>
       <div class="field"><label>Recorrência</label><select id="pa-recurrence">${recurrenceOptions}</select></div>
       <div class="field"><label>Prioridade</label><select id="pa-priority">${priorityOptions}</select></div>
-      <div class="field"><label>Tarefa *</label><input id="pa-activity" value="${esc(current.activity || "")}" placeholder="Nome da tarefa"></div>
+      <div class="field"><label>${productActivityParentGroupId ? "Subtarefa" : "Tarefa"} *</label><input id="pa-activity" value="${esc(current.activity || "")}" placeholder="Nome da ${productActivityParentGroupId ? "subtarefa" : "tarefa"}"></div>
       <div class="field"><label>Informação</label><textarea id="pa-information" rows="5" placeholder="Instruções, contexto ou informações importantes">${esc(current.information || "")}</textarea></div>
-      <div class="field"><label>Checklist</label><div class="checklist-editor" id="pa-checklist"></div><button class="btn checklist-add" id="pa-checklist-add" type="button">+ Item</button></div>
+      <div class="field"><label>Checklist</label>${hasSubtasks ? '<div class="panel-list">O checklist desta tarefa fica nas subtarefas.</div>' : '<div class="checklist-editor" id="pa-checklist"></div><button class="btn checklist-add" id="pa-checklist-add" type="button">+ Item</button>'}</div>
       <div class="field"><label>Objetivo</label><select id="pa-objective">${objectiveOptions}</select></div>
       <div class="field"><label>Responsáveis padrão</label>${multiPickerHtml("pa-assignees", assigneeOptions, selectedAssignees, "Selecionar responsáveis")}</div>
       <div class="field"><label>Cargos responsáveis</label>${multiPickerHtml("pa-assignee-job-titles", assigneeJobTitleOptions(), selectedJobTitles, "Selecionar cargos")}</div>
       <div class="field"><label>Depende de</label>${multiPickerHtml("pa-dependencies", dependencyOptions, selectedDependencies, "Selecionar dependências")}</div>
     </div>
-    <div class="modal-foot"><button class="btn" id="pa-cancel">Cancelar</button><button class="btn primary" id="pa-save">${current.id ? "Salvar" : cloneSource ? "Criar cópia" : "Criar"}</button></div>
+    <div class="modal-foot">${editing && !productActivityParentGroupId ? '<button class="btn" id="pa-add-subtask">+ Subtarefa</button>' : ""}<button class="btn" id="pa-cancel">Cancelar</button><button class="btn primary" id="pa-save">${current.id ? "Salvar" : cloneSource ? "Criar cópia" : "Criar"}</button></div>
   </aside>`;
   document.querySelector("#ov .modal.full")?.appendChild(overlay);
   overlay.addEventListener("click", (event) => { if (event.target === overlay) closeProductActivityDrawer(); });
   document.getElementById("pa-close").addEventListener("click", closeProductActivityDrawer);
   document.getElementById("pa-cancel").addEventListener("click", closeProductActivityDrawer);
   document.getElementById("pa-save").addEventListener("click", saveProductActivity);
-  document.getElementById("pa-checklist-add").addEventListener("click", () => {
+  document.getElementById("pa-add-subtask")?.addEventListener("click", () => openProductActivityDrawer(null, null, editing.id));
+  document.getElementById("pa-checklist-add")?.addEventListener("click", () => {
     productActivityChecklistDraft.push({ id: crypto.randomUUID(), text: "", checked: false });
     renderProductActivityChecklistEditor();
     document.querySelector("#pa-checklist .checklist-edit-row:last-child input")?.focus();
@@ -2842,6 +2916,14 @@ async function saveProductActivity() {
   const assigneeJobTitles = multiPickerValues("pa-assignee-job-titles");
   const selectedProductIds = multiPickerValues("pa-products");
   if (!selectedProductIds.length) { toast("Selecione pelo menos um produto.", true); return; }
+  const parentTemplates = productActivityParentGroupId
+    ? rows.filter((item) => (item.template_group_id || item.id) === productActivityParentGroupId)
+    : [];
+  const parentsToClear = parentTemplates.filter((parent) => !rows.some((item) => item.parent_template_id === parent.id));
+  if (productActivityParentGroupId && selectedProductIds.some((productId) => !parentTemplates.some((item) => item.product_id === productId))) {
+    toast("A subtarefa só pode ser vinculada aos produtos da tarefa principal.", true);
+    return;
+  }
   if (createsTemplateDependencyCycle(rows, recordId, dependencyIds)) {
     toast("Essa dependência criaria um ciclo entre as tarefas.", true);
     return;
@@ -2878,9 +2960,11 @@ async function saveProductActivity() {
       const targetDependencies = selectedDependencies.map((selectedDependency) => productId === productActivityState.productId
         ? selectedDependency
         : productRows.find((item) => productActivityIdentity(item) === productActivityIdentity(selectedDependency))).filter(Boolean);
+      const targetParent = parentTemplates.find((item) => item.product_id === productId) || null;
       const body = {
         ...baseBody,
         product_id: productId,
+        parent_template_id: targetParent?.id || null,
         depends_on_template_id: targetDependencies[0]?.id || null,
         dependency_template_ids: targetDependencies.map((item) => item.id),
         objective_template_id: targetObjective?.id || null,
@@ -2892,6 +2976,14 @@ async function saveProductActivity() {
       } else {
         const draft = { id: productId === productActivityState.productId ? recordId : crypto.randomUUID(), ...body, created_at: new Date().toISOString() };
         rows.push(isLive() ? await createRow("productActivities", draft) : draft);
+      }
+    }
+    if (productActivityParentGroupId) {
+      for (const parent of parentsToClear) {
+        if (!normalizeChecklist(parent.checklist).length) continue;
+        const changes = { checklist: [], updated_at: new Date().toISOString() };
+        if (isLive()) await updateRow("productActivities", parent.id, changes);
+        Object.assign(parent, changes);
       }
     }
     for (const removed of related.filter((item) => !selectedProductIds.includes(item.product_id))) {
@@ -5804,15 +5896,48 @@ function renderRegistrationsSection() {
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(item);
     });
-    const rows = [...groups.values()].map((linked) => {
+    const grouped = [...groups.entries()].map(([id, linked]) => {
       const item = linked[0];
+      const parent = linked.map((candidate) => productTemplateParent(candidate, items)).find(Boolean);
+      return { id, linked, item, parentGroupId: parent ? (parent.template_group_id || parent.id) : null };
+    });
+    const groupedById = new Map(grouped.map((group) => [group.id, group]));
+    const childrenByParent = new Map();
+    grouped.forEach((group) => {
+      if (!group.parentGroupId || !groupedById.has(group.parentGroupId)) return;
+      if (!childrenByParent.has(group.parentGroupId)) childrenByParent.set(group.parentGroupId, []);
+      childrenByParent.get(group.parentGroupId).push(group);
+    });
+    const roots = grouped.filter((group) => !group.parentGroupId || !groupedById.has(group.parentGroupId));
+    const summary = (group) => {
+      const { linked, item } = group;
       const products = [...new Set(linked.map((candidate) => registrationProductName(candidate.product_id)))].join(", ");
       const owners = [...new Set(linked.map((candidate) => responsibilityNames(
         candidate.default_assignee_ids, candidate.default_owner_id, candidate.default_assignee_job_titles
       )).filter((value) => value !== "—"))].join(", ") || "—";
       const objectives = [...new Set(linked.map((candidate) => loadProductObjectives().find((objective) => objective.id === candidate.objective_template_id)?.name).filter(Boolean))].join(", ") || "—";
       const dependencies = [...new Set(linked.flatMap((candidate) => normalizeIdList(candidate.dependency_template_ids, candidate.depends_on_template_id)).map((id) => activityDisplayName(items.find((other) => other.id === id))).filter((name) => name !== "—"))].join(", ") || "—";
-      return `<tr><td><strong>${esc(activityDisplayName(item))}</strong></td><td>${esc(products)}</td><td>${esc(item.group || "—")}</td><td>${esc(item.sector || "—")}</td><td>${esc(item.channel || "—")}</td><td>${esc(item.type || "—")}</td><td>${priorityBadge(item.priority)}</td><td>${esc(RECURRENCE_LABEL[item.recurrence] || "Única")}</td><td>${esc(item.information || "—")}</td><td>${normalizeChecklist(item.checklist).length} item(ns)</td><td>${esc(objectives)}</td><td>${esc(owners)}</td><td>${esc(dependencies)}</td><td class="act"><button class="rowbtn reg-template-clone" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Clonar tarefa">⧉</button><button class="rowbtn edit reg-template-edit" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Editar tarefa">✎</button></td></tr>`;
+      return { products, owners, objectives, dependencies };
+    };
+    const rows = roots.map((group) => {
+      const { item } = group;
+      const details = summary(group);
+      const children = (childrenByParent.get(group.id) || []).sort((a, b) => Number(a.item.sort_order || 0) - Number(b.item.sort_order || 0));
+      const expanded = registrationExpandedTaskGroups.has(group.id);
+      const childNames = children.map((child) => activityDisplayName(child.item)).join(" ");
+      const childRows = children.map((child) => {
+        const childDetails = summary(child);
+        const checklist = normalizeChecklist(child.item.checklist);
+        return `<div class="registration-subtask-item">
+          <span class="registration-subtask-name"><b>↳</b><strong>${esc(activityDisplayName(child.item))}</strong></span>
+          <span><small>Produtos</small>${esc(childDetails.products)}</span>
+          <span><small>Responsáveis</small>${esc(childDetails.owners)}</span>
+          <span><small>Checklist</small>${checklist.length} item(ns)</span>
+          <span class="tool-row-actions"><button class="rowbtn reg-template-clone" data-id="${esc(child.item.id)}" data-product="${esc(child.item.product_id)}" title="Clonar subtarefa">⧉</button><button class="rowbtn edit reg-template-edit" data-id="${esc(child.item.id)}" data-product="${esc(child.item.product_id)}" title="Editar subtarefa">✎</button></span>
+        </div>`;
+      }).join("");
+      return `<tr data-task-group="${esc(group.id)}"><td><span class="registration-task-name">${children.length ? `<button class="registration-task-toggle" data-group="${esc(group.id)}" title="${expanded ? "Recolher" : "Expandir"} subtarefas">${expanded ? "▾" : "▸"}</button>` : '<span class="registration-task-toggle-spacer"></span>'}<strong>${esc(activityDisplayName(item))}</strong><span class="registration-subtask-count">${children.length || ""}</span><span hidden>${esc(childNames)}</span></span></td><td>${esc(details.products)}</td><td>${esc(item.group || "—")}</td><td>${esc(item.sector || "—")}</td><td>${esc(item.channel || "—")}</td><td>${esc(item.type || "—")}</td><td>${priorityBadge(item.priority)}</td><td>${esc(RECURRENCE_LABEL[item.recurrence] || "Única")}</td><td>${esc(item.information || "—")}</td><td>${children.length ? '<span class="muted">Nas subtarefas</span>' : `${normalizeChecklist(item.checklist).length} item(ns)`}</td><td>${esc(details.objectives)}</td><td>${esc(details.owners)}</td><td>${esc(details.dependencies)}</td><td class="act"><button class="rowbtn reg-template-add-subtask" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Adicionar subtarefa">＋</button><button class="rowbtn reg-template-clone" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Clonar tarefa">⧉</button><button class="rowbtn edit reg-template-edit" data-id="${esc(item.id)}" data-product="${esc(item.product_id)}" title="Editar tarefa">✎</button></td></tr>
+        <tr class="registration-subtasks-container" data-parent-group="${esc(group.id)}"${expanded ? "" : " hidden"}><td colspan="14"><div class="registration-subtasks-list">${childRows}</div></td></tr>`;
     }).join("");
     root.innerHTML = registrationTemplateTable("tarefa", groups.size, "Tarefa", "<th>Produtos</th><th>Grupo</th><th>Setor</th><th>Canal</th><th>Tipo</th><th>Prioridade</th><th>Recorrência</th><th>Informação</th><th>Checklist</th><th>Objetivo</th><th>Responsáveis padrão</th><th>Depende de</th>", rows, 14);
   } else if (section === "goals") {
@@ -5849,6 +5974,22 @@ function renderRegistrationsSection() {
     openRegistrationProductPicker(section);
   });
   root.querySelectorAll(".reg-template-edit").forEach((button) => button.addEventListener("click", () => openRegistrationTemplateEditor(section, button.dataset.product, button.dataset.id)));
+  root.querySelectorAll(".reg-template-add-subtask").forEach((button) => button.addEventListener("click", () => {
+    productActivityState = { productId: button.dataset.product, editId: null, objectiveEditId: null, goalEditId: null, tab: "activities" };
+    openProductActivityDrawer(null, null, button.dataset.id);
+  }));
+  root.querySelectorAll(".registration-task-toggle").forEach((button) => button.addEventListener("click", () => {
+    const groupId = button.dataset.group;
+    const container = root.querySelector(`.registration-subtasks-container[data-parent-group="${CSS.escape(groupId)}"]`);
+    const rootRow = button.closest("tr");
+    if (!container || !rootRow) return;
+    if (registrationExpandedTaskGroups.has(groupId)) registrationExpandedTaskGroups.delete(groupId);
+    else registrationExpandedTaskGroups.add(groupId);
+    rootRow.after(container);
+    container.hidden = !registrationExpandedTaskGroups.has(groupId);
+    button.textContent = container.hidden ? "▸" : "▾";
+    button.title = container.hidden ? "Expandir subtarefas" : "Recolher subtarefas";
+  }));
   root.querySelectorAll(".reg-template-clone").forEach((button) => button.addEventListener("click", () => {
     productActivityState = { productId: button.dataset.product, editId: null, objectiveEditId: null, goalEditId: null, tab: "activities" };
     openProductActivityDrawer(null, button.dataset.id);
@@ -6027,6 +6168,16 @@ function applyRegistrationTableState(table) {
   const start = (tableState.page - 1) * tableState.pageSize;
   const pageRows = new Set(filteredRows.slice(start, start + tableState.pageSize));
   rows.forEach((row) => { row.hidden = !pageRows.has(row); });
+  if (registrationsState.section === "activities") {
+    rows.forEach((row) => {
+      const groupId = row.dataset.taskGroup;
+      if (!groupId) return;
+      const container = table.querySelector(`.registration-subtasks-container[data-parent-group="${CSS.escape(groupId)}"]`);
+      if (!container) return;
+      row.after(container);
+      container.hidden = row.hidden || !registrationExpandedTaskGroups.has(groupId);
+    });
+  }
   if (rows.length && !filteredRows.length) {
     const empty = document.createElement("tr");
     empty.className = "registration-filter-empty";

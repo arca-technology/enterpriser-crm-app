@@ -532,6 +532,23 @@
   .registrations-root .product-activity-list td:first-child strong{color:var(--text)}
   .registrations-product{display:grid;gap:3px}
   .registrations-product small{color:var(--muted);font-size:10.5px}
+  .registration-task-name{display:flex;min-width:0;align-items:center;gap:7px}
+  .registration-task-name strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .registration-task-toggle,.registration-task-toggle-spacer{display:inline-flex;width:22px;height:22px;flex:0 0 22px;align-items:center;justify-content:center}
+  .registration-task-toggle{border:1px solid var(--border);border-radius:4px;background:var(--panel2);color:var(--text);font:inherit;font-size:12px;cursor:pointer}
+  .registration-task-toggle:hover{border-color:var(--cyan);color:var(--cyan)}
+  .registration-subtask-count{display:inline-flex;min-width:18px;height:18px;align-items:center;justify-content:center;border-radius:9px;background:var(--blue);color:#fff;font-size:9px;font-weight:800}
+  .registration-subtask-count:empty{display:none}
+  .registration-subtasks-container>td{padding:0!important;background:var(--bg)!important}
+  .registration-subtasks-list{display:grid;border-bottom:1px solid var(--border)}
+  .registration-subtask-item{display:grid;grid-template-columns:minmax(240px,1.4fr) minmax(180px,1fr) minmax(180px,1fr) 100px 72px;align-items:center;gap:12px;min-height:38px;padding:4px 8px 4px 52px;border-top:1px solid var(--border2);background:color-mix(in srgb,var(--panel2) 58%,var(--bg));box-sizing:border-box}
+  .registration-subtask-item>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .registration-subtask-name{display:flex;align-items:center;gap:7px}
+  .registration-subtask-name b{color:var(--cyan);font-size:16px}
+  .registration-subtask-item small{display:block;color:var(--muted);font-size:8px;font-weight:700;text-transform:uppercase}
+  .registration-subtask-item .tool-row-actions{display:flex;justify-content:flex-end;overflow:visible}
+  .product-activity-list .pa-subtask-row td:first-child{border-left:3px solid var(--cyan)}
+  .product-activity-list .pa-subtask-row td:nth-child(7){padding-left:22px}
   .registration-filter-strip{display:flex;align-items:center;justify-content:space-between;gap:10px;min-height:20px;height:20px;flex:0 0 20px;padding:1px 8px;background:var(--bg);border-bottom:1px solid var(--border2);box-sizing:border-box}
   .tools-filter-strip{position:relative;overflow:hidden}
   .tools-loading-progress{position:absolute;right:0;bottom:0;left:0;height:2px;background:color-mix(in srgb,var(--cyan) 18%,transparent);overflow:hidden}

@@ -227,6 +227,7 @@ const REMOTE_TABLE = {
   productGoals: "product_goal_templates",
   deliveryObjectives: "delivery_objectives",
   deliveryGoals: "delivery_goals",
+  files: "company_files",
   processes: "training_processes",
   documents: "company_documents",
   contactCompanies: "contact_companies"
@@ -302,6 +303,7 @@ const DEMO = {
   productGoals: [],
   deliveryObjectives: [],
   deliveryGoals: [],
+  files: [],
   processes: [],
   documents: [],
   contactCompanies: []
@@ -5491,12 +5493,12 @@ function helpContentHtml() {
     </section>
 
     <section class="help-section" id="help-tools"><h4>Ferramentas</h4><ul>
-      <li><b>Arquivos:</b> catálogo de atalhos para pastas, como links do Google Drive, com nome e descrição. O CRM guarda o link, não copia os arquivos.</li>
+      <li><b>Arquivos:</b> catálogo por empresa com status, cliente, até cinco níveis de setor, referência ou link do arquivo e data. A busca principal localiza empresas por nome ou CNPJ.</li>
       <li><b>E-mails:</b> ao criar uma entrega, o CRM cria automaticamente na HostGator uma conta formada pela raiz do CNPJ em <b>@ecommerce365.com.br</b>. A senha pode ser revelada ou copiada nesta tela.</li>
       <li><b>Processos:</b> biblioteca de treinamento organizada por nome, categoria e tags. Cada etapa registra sistema, módulo, submódulo, grupo, tipo, URL e detalhes. O botão de fluxo agrupa as etapas visualmente por módulo, submódulo e grupo.</li>
       <li><b>Documentação:</b> apresentações textuais em slides, com título, páginas, negrito, itálico, cores e alinhamento. Os slides podem ser separados em grupos recolhíveis e os grupos podem ser reordenados por arraste ou pelas setas.</li>
-      <li>Busca, classificação, filtros e seleção de colunas funcionam nas tabelas de E-mails, Processos e Documentação.</li>
-    </ul><p class="help-note"><b>Segurança:</b> as credenciais de e-mail são compartilhadas entre os usuários ativos do CRM e a senha permanece criptografada no Supabase. Processos e documentos podem ser consultados por usuários ativos e alterados apenas por administradores. Os links de Arquivos continuam salvos somente neste navegador.</p></section>
+      <li>Busca, classificação, filtros e seleção de colunas funcionam nas tabelas de Arquivos, E-mails, Processos e Documentação.</li>
+    </ul><p class="help-note"><b>Segurança:</b> as credenciais de e-mail são compartilhadas entre os usuários ativos do CRM e a senha permanece criptografada no Supabase. Arquivos, processos e documentos podem ser consultados por usuários ativos e alterados apenas por administradores.</p></section>
 
     <section class="help-section" id="help-admin"><h4>Administração e suporte</h4><ul>
       <li><b>LOG:</b> administradores consultam as alterações recentes registradas nas principais entidades.</li>
@@ -6698,9 +6700,15 @@ function requireCurrentUserAdmin(area = "Esta área") {
 }
 
 const TOOL_FOLDERS_KEY = "crm_tool_folders";
+const TOOL_FILES_KEY = "crm_tool_files_v2";
 const TOOL_EMAILS_KEY = "crm_tool_emails";
 const TOOL_COLUMN_DEFS = {
-  files: [{ k: "name", h: "Nome" }, { k: "description", h: "Descrição" }, { k: "url", h: "Link" }],
+  files: [
+    { k: "status", h: "Status" }, { k: "client", h: "Cliente" }, { k: "company", h: "Empresa" },
+    { k: "sector_1", h: "Setor 1" }, { k: "sector_2", h: "Setor 2" }, { k: "sector_3", h: "Setor 3" },
+    { k: "sector_4", h: "Setor 4" }, { k: "sector_5", h: "Setor 5" }, { k: "file_reference", h: "Arquivo" },
+    { k: "file_date", h: "Data" }
+  ],
   emails: [{ k: "cnpj", h: "CNPJ" }, { k: "client", h: "Cliente" }, { k: "email", h: "Email" }, { k: "password", h: "Senha" }, { k: "tags", h: "Tags" }],
   processes: [
     { k: "title", h: "Nome do processo" }, { k: "category", h: "Categoria" },
@@ -6715,6 +6723,11 @@ const TOOLS_PAGE_SIZE = 50;
 const TOOLS_CACHE_TTL_MS = 5 * 60 * 1000;
 const TOOLS_CACHE_PREFIX = "crm_tools_cache_v1:";
 let toolsState = { section: "files", search: "", tables: {} };
+let remoteToolFiles = [];
+let remoteToolFilesLoaded = false;
+let remoteToolFilesLoading = false;
+let remoteToolFilesError = "";
+let remoteToolFilesLoadedAt = 0;
 let remoteToolEmails = [];
 let remoteToolEmailsLoaded = false;
 let remoteToolEmailsLoading = false;
@@ -6742,18 +6755,22 @@ function readToolsSessionCache(section) {
 }
 
 function saveToolsSessionCache(section, rows, loadedAt = Date.now()) {
-  if (!["processes", "documents"].includes(section)) return;
+  if (!["files", "processes", "documents"].includes(section)) return;
   try {
     sessionStorage.setItem(`${TOOLS_CACHE_PREFIX}${section}`, JSON.stringify({ rows, loadedAt }));
   } catch (e) {}
 }
 
 function hydrateToolsSessionCache(section) {
-  if (hydratedToolsCache.has(section) || !["processes", "documents"].includes(section)) return;
+  if (hydratedToolsCache.has(section) || !["files", "processes", "documents"].includes(section)) return;
   hydratedToolsCache.add(section);
   const cached = readToolsSessionCache(section);
   if (!cached) return;
-  if (section === "processes") {
+  if (section === "files") {
+    remoteToolFiles = cached.rows;
+    remoteToolFilesLoaded = true;
+    remoteToolFilesLoadedAt = Number(cached.loadedAt || 0);
+  } else if (section === "processes") {
     remoteToolProcesses = cached.rows;
     remoteToolProcessesLoaded = true;
     remoteToolProcessesLoadedAt = Number(cached.loadedAt || 0);
@@ -6860,10 +6877,10 @@ function toolEmailValue(account, key) {
   return String(account[key] || "—");
 }
 
-function toolsToolbarHtml(count, addTitle, addId, canAdd = true) {
+function toolsToolbarHtml(count, addTitle, addId, canAdd = true, searchPlaceholder = "Buscar...") {
   return `<div class="tools-toolbar">
     <div class="registration-toolbar-left"><span class="muted">${count} item(ns)</span></div>
-    <div class="registration-toolbar-center"><input class="search registration-toolbar-search tools-search" placeholder="Buscar..." value="${esc(toolsState.search || "")}">${canAdd ? `<button class="btn primary plus" id="${addId}" title="${esc(addTitle)}">+</button>` : ""}</div>
+    <div class="registration-toolbar-center"><input class="search registration-toolbar-search tools-search" placeholder="${esc(searchPlaceholder)}" value="${esc(toolsState.search || "")}">${canAdd ? `<button class="btn primary plus" id="${addId}" title="${esc(addTitle)}">+</button>` : ""}</div>
     <div class="registration-toolbar-right"><button class="btn tools-cols-btn" type="button" title="Selecionar colunas">⊞</button><button class="view active" type="button">Tabela</button><button class="view" type="button" disabled>Matriz</button><button class="view" type="button" disabled>Dashboard</button></div>
   </div>`;
 }
@@ -6899,84 +6916,203 @@ function renderToolsSection() {
   else renderToolFolders(root);
 }
 
-function renderToolFolders(root) {
-  const allFolders = readToolRows(TOOL_FOLDERS_KEY);
-  const query = toolsState.search.trim().toLocaleLowerCase("pt-BR");
-  const folders = allFolders.filter((folder) => !query || [folder.name, folder.description, folder.url].some((value) => String(value || "").toLocaleLowerCase("pt-BR").includes(query)));
-  const page = paginateToolRows(folders, "files");
-  const visible = new Set(visibleToolColumns("files").map((col) => col.k));
-  const cards = page.rows.length ? page.rows.map((folder) => `<article class="tool-folder">
-    <div class="tool-folder-icon" aria-hidden="true">📁</div>
-    <div class="tool-folder-main">
-      ${visible.has("name") ? `<div class="tool-folder-name">${esc(folder.name)}</div>` : ""}
-      ${visible.has("description") ? `<div class="tool-folder-description">${esc(folder.description || "Sem descrição")}</div>` : ""}
-      ${visible.has("url") ? `<div class="tool-folder-description">${esc(folder.url || "Sem link")}</div>` : ""}
-    </div>
-    <div class="tool-folder-actions">
-      ${folder.url ? `<button class="tool-icon-btn tool-folder-open" data-id="${esc(folder.id)}" title="Abrir pasta">↗</button>` : ""}
-      <button class="tool-icon-btn tool-folder-edit" data-id="${esc(folder.id)}" title="Editar pasta">✎</button>
-      <button class="tool-icon-btn tool-folder-delete" data-id="${esc(folder.id)}" title="Excluir pasta">×</button>
-    </div>
-  </article>`).join("") : '<div class="tool-empty">Nenhuma pasta cadastrada.</div>';
-  root.innerHTML = `${toolsToolbarHtml(folders.length, "Adicionar pasta", "tool-folder-add")}<div class="tool-folder-grid">${cards}</div>${toolsPaginationHtml(folders.length, "files")}`;
-  wireToolsToolbar(root);
-  wireToolsPagination(root, "files");
-  document.getElementById("tool-folder-add").addEventListener("click", () => openToolFolderForm());
-  root.querySelectorAll(".tool-folder-open").forEach((button) => button.addEventListener("click", () => openToolFolder(button.dataset.id)));
-  root.querySelectorAll(".tool-folder-edit").forEach((button) => button.addEventListener("click", () => openToolFolderForm(button.dataset.id)));
-  root.querySelectorAll(".tool-folder-delete").forEach((button) => button.addEventListener("click", () => deleteToolFolder(button.dataset.id)));
+const TOOL_FILE_STATUS_LABEL = { active: "Ativo", inactive: "Inativo", downloaded: "Baixado" };
+
+function migrateLegacyToolFiles() {
+  if (readToolRows(TOOL_FILES_KEY).length) return;
+  const legacy = readToolRows(TOOL_FOLDERS_KEY);
+  if (!legacy.length) return;
+  saveToolRows(TOOL_FILES_KEY, legacy.map((folder) => ({
+    id: folder.id || crypto.randomUUID(), status: "active", client: folder.description || null, company_id: null,
+    sector_1: null, sector_2: null, sector_3: null, sector_4: null, sector_5: null,
+    file_reference: folder.url || folder.name || "Arquivo", file_date: String(folder.updated_at || "").slice(0, 10) || null,
+    created_at: folder.updated_at || new Date().toISOString(), updated_at: folder.updated_at || new Date().toISOString()
+  })));
 }
 
-function openToolFolder(id) {
-  const folder = readToolRows(TOOL_FOLDERS_KEY).find((item) => item.id === id);
-  if (!folder?.url) return;
+function toolFileRows() {
+  if (isLive()) return remoteToolFiles;
+  migrateLegacyToolFiles();
+  return readToolRows(TOOL_FILES_KEY);
+}
+
+function toolFileCompany(file) {
+  return cache?.companyById?.[file.company_id] || cache?.companies?.find((company) => company.tax_id === file.company_id) || null;
+}
+
+function toolFileValue(file, key) {
+  if (key === "status") return TOOL_FILE_STATUS_LABEL[file.status] || file.status || "—";
+  if (key === "company") {
+    const company = toolFileCompany(file);
+    return company?.trade_name || company?.legal_name || file.company_id || "—";
+  }
+  if (key === "file_date") return dt(file.file_date);
+  return String(file[key] || "—");
+}
+
+function toolFileStatusBadge(status) {
+  const tone = status === "active" ? "won" : status === "inactive" ? "lost" : "lead";
+  return badge(tone, TOOL_FILE_STATUS_LABEL[status] || status || "—");
+}
+
+async function loadRemoteToolFiles({ force = false } = {}) {
+  if (!isLive() || remoteToolFilesLoading) return;
+  if (!force && !toolsCacheIsStale(remoteToolFilesLoaded, remoteToolFilesLoadedAt)) return;
+  remoteToolFilesLoading = true;
+  remoteToolFilesError = "";
   try {
-    const url = new URL(folder.url);
-    if (!["http:", "https:"].includes(url.protocol)) throw new Error("invalid");
-    window.open(url.href, "_blank", "noopener,noreferrer");
-  } catch (e) {
-    toast("Link da pasta inválido.", true);
+    remoteToolFiles = await fetchTable("files");
+    remoteToolFilesLoaded = true;
+    remoteToolFilesLoadedAt = Date.now();
+    saveToolsSessionCache("files", remoteToolFiles, remoteToolFilesLoadedAt);
+  } catch (err) {
+    remoteToolFilesError = err.message;
+  } finally {
+    remoteToolFilesLoading = false;
+    const root = document.getElementById("tools-root");
+    if (root && toolsState.section === "files") renderToolFolders(root);
   }
 }
 
-function openToolFolderForm(id = null) {
-  const current = readToolRows(TOOL_FOLDERS_KEY).find((item) => item.id === id) || {};
-  sidePanel(id ? "Editar pasta" : "Nova pasta", `<div class="form">
-    <div class="field full"><label>Nome da pasta</label><input id="tool-folder-name" value="${esc(current.name || "")}" autofocus></div>
-    <div class="field full"><label>Link da pasta</label><input id="tool-folder-url" type="url" value="${esc(current.url || "")}" placeholder="https://drive.google.com/..."></div>
-    <div class="field full"><label>Descrição</label><textarea id="tool-folder-description" rows="4">${esc(current.description || "")}</textarea></div>
-  </div><div class="modal-foot"><button class="btn" id="tool-folder-cancel">Cancelar</button><button class="btn primary" id="tool-folder-save">Salvar</button></div>`, {
-    closeOnOverlay: true,
-    onClose: () => openToolsModal("files")
+function renderToolFolders(root) {
+  if (isLive() && !remoteToolFilesLoading && !remoteToolFilesError && toolsCacheIsStale(remoteToolFilesLoaded, remoteToolFilesLoadedAt)) loadRemoteToolFiles();
+  const allFiles = toolFileRows();
+  const query = toolsState.search.trim().toLocaleLowerCase("pt-BR");
+  const tableState = toolTableState("files");
+  const files = allFiles.filter((file) => {
+    const company = toolFileCompany(file);
+    const companySearch = [company?.trade_name, company?.legal_name, company?.tax_id, file.company_id]
+      .some((value) => String(value || "").toLocaleLowerCase("pt-BR").includes(query));
+    return (!query || companySearch) && Object.entries(tableState.filters).every(([key, selected]) =>
+      !selected?.size || selected.has(toolFileValue(file, key))
+    );
   });
-  document.getElementById("tool-folder-cancel").addEventListener("click", () => openToolsModal("files"));
-  document.getElementById("tool-folder-save").addEventListener("click", () => {
-    const name = document.getElementById("tool-folder-name").value.trim();
-    if (!name) { toast("Informe o nome da pasta.", true); return; }
-    const rows = readToolRows(TOOL_FOLDERS_KEY);
-    const item = {
-      id: current.id || crypto.randomUUID(),
-      name,
-      url: document.getElementById("tool-folder-url").value.trim(),
-      description: document.getElementById("tool-folder-description").value.trim(),
+  if (tableState.sortKey) {
+    files.sort((a, b) => toolFileValue(a, tableState.sortKey).localeCompare(
+      toolFileValue(b, tableState.sortKey), "pt-BR", { numeric: true, sensitivity: "base" }
+    ) * tableState.sortDir);
+  }
+  const page = paginateToolRows(files, "files");
+  const columns = visibleToolColumns("files");
+  const rows = page.rows.length ? page.rows.map((file) => `<tr data-id="${esc(file.id)}">
+    ${columns.map((col) => {
+      if (col.k === "status") return `<td>${toolFileStatusBadge(file.status)}</td>`;
+      if (col.k === "file_reference") {
+        const link = safeHttpUrl(file.file_reference);
+        return `<td>${link ? `<a href="${esc(link)}" target="_blank" rel="noopener">${esc(file.file_reference)}</a>` : esc(file.file_reference || "—")}</td>`;
+      }
+      return `<td>${esc(toolFileValue(file, col.k))}</td>`;
+    }).join("")}
+    <td><span class="tool-row-actions">${safeHttpUrl(file.file_reference) ? `<button class="tool-icon-btn tool-folder-open" data-id="${esc(file.id)}" title="Abrir arquivo">↗</button>` : ""}${currentUserIsAdmin() ? `<button class="tool-icon-btn tool-folder-edit" data-id="${esc(file.id)}" title="Editar arquivo">✎</button><button class="tool-icon-btn tool-folder-delete" data-id="${esc(file.id)}" title="Excluir arquivo">×</button>` : ""}</span></td>
+  </tr>`).join("") : `<tr><td colspan="${columns.length + 1}" class="tool-empty">Nenhum arquivo cadastrado.</td></tr>`;
+  root.innerHTML = `${toolsToolbarHtml(files.length, "Adicionar arquivo", "tool-folder-add", currentUserIsAdmin(), "Buscar empresa...")}${toolFilterStrip("files", tableState, { loading: remoteToolFilesLoading, error: remoteToolFilesError })}<div class="table-wrap tools-table-wrap"><table><thead><tr>${columns.map((col) => `<th data-tool-key="${esc(col.k)}" title="Clique para ordenar. Ctrl+clique para filtrar.">${esc(col.h)}${tableState.sortKey === col.k ? ` <span class="arrow">${tableState.sortDir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}<th>Ações</th></tr></thead><tbody>${rows}</tbody></table></div>${toolsPaginationHtml(files.length, "files")}`;
+  wireToolsToolbar(root);
+  wireToolsPagination(root, "files");
+  wireToolsLoadRetry(root, "files");
+  wireSecondaryTableSelection(root.querySelector("table"), "tools:files");
+  document.getElementById("tool-folder-add")?.addEventListener("click", () => openToolFolderForm());
+  root.querySelectorAll(".tool-folder-open").forEach((button) => button.addEventListener("click", () => openToolFolder(button.dataset.id)));
+  root.querySelectorAll(".tool-folder-edit").forEach((button) => button.addEventListener("click", () => openToolFolderForm(button.dataset.id)));
+  root.querySelectorAll(".tool-folder-delete").forEach((button) => button.addEventListener("click", () => deleteToolFolder(button.dataset.id)));
+  root.querySelectorAll("th[data-tool-key]").forEach((header) => header.addEventListener("click", (event) => {
+    const key = header.dataset.toolKey;
+    if (event.ctrlKey || event.metaKey) { openToolColumnFilter(header, key, allFiles, toolFileValue, "files"); return; }
+    if (tableState.sortKey === key) tableState.sortDir *= -1;
+    else { tableState.sortKey = key; tableState.sortDir = 1; }
+    renderToolsSection();
+  }));
+  root.querySelectorAll(".tool-filter-badge").forEach((filter) => filter.addEventListener("click", () => {
+    delete tableState.filters[filter.dataset.key]; renderToolsSection();
+  }));
+  root.querySelector(".tool-filter-clear-all")?.addEventListener("click", () => { tableState.filters = {}; renderToolsSection(); });
+}
+
+function openToolFolder(id) {
+  const file = toolFileRows().find((item) => item.id === id);
+  const url = safeHttpUrl(file?.file_reference);
+  if (url) window.open(url, "_blank", "noopener,noreferrer");
+}
+
+function closeToolFilePanel(closePanel) {
+  closePanel?.();
+  if (document.getElementById("tools-root")) renderToolsSection();
+  else openToolsModal("files");
+}
+
+function openToolFolderForm(id = null) {
+  if (!requireCurrentUserAdmin("Arquivos")) return;
+  const current = toolFileRows().find((item) => item.id === id) || {};
+  const companyPicker = singleSearchPickerHtml("tool-file-company", companyRefOptions(cache), current.company_id, "Buscar por nome ou CNPJ");
+  const content = `<div class="form">
+    <div class="field"><label>Status *</label><select id="tool-file-status"><option value="active"${(current.status || "active") === "active" ? " selected" : ""}>Ativo</option><option value="inactive"${current.status === "inactive" ? " selected" : ""}>Inativo</option><option value="downloaded"${current.status === "downloaded" ? " selected" : ""}>Baixado</option></select></div>
+    <div class="field"><label>Cliente</label><input id="tool-file-client" value="${esc(current.client || "")}"></div>
+    <div class="field full"><label>Empresa *</label>${companyPicker}</div>
+    ${[1, 2, 3, 4, 5].map((number) => `<div class="field"><label>Setor ${number}</label><input id="tool-file-sector-${number}" value="${esc(current[`sector_${number}`] || "")}"></div>`).join("")}
+    <div class="field full"><label>Arquivo *</label><input id="tool-file-reference" value="${esc(current.file_reference || "")}" placeholder="Nome, caminho ou link do arquivo"></div>
+    <div class="field"><label>Data</label><input id="tool-file-date" type="date" value="${esc(current.file_date || isoDay(new Date()))}"></div>
+  </div><div class="modal-foot"><button class="btn" id="tool-folder-cancel">Cancelar</button><button class="btn primary" id="tool-folder-save">Salvar</button></div>`;
+  const closePanel = document.getElementById("tools-root")
+    ? nestedSidePanel(id ? "Editar arquivo" : "Novo arquivo", content, { closeOnOverlay: true })
+    : sidePanel(id ? "Editar arquivo" : "Novo arquivo", content, { closeOnOverlay: true, onClose: () => openToolsModal("files") });
+  wireSingleSearchPicker("tool-file-company");
+  document.getElementById("tool-folder-cancel").addEventListener("click", () => closeToolFilePanel(closePanel));
+  document.getElementById("tool-folder-save").addEventListener("click", async () => {
+    const companyId = document.querySelector("#tool-file-company input[type=hidden]").value;
+    const fileReference = document.getElementById("tool-file-reference").value.trim();
+    if (!companyId) { toast("Selecione uma empresa pela busca.", true); return; }
+    if (!fileReference) { toast("Informe o arquivo.", true); return; }
+    const button = document.getElementById("tool-folder-save");
+    button.disabled = true; button.textContent = "Salvando...";
+    const body = {
+      status: document.getElementById("tool-file-status").value,
+      client: document.getElementById("tool-file-client").value.trim() || null,
+      company_id: companyId,
+      ...Object.fromEntries([1, 2, 3, 4, 5].map((number) => [`sector_${number}`, document.getElementById(`tool-file-sector-${number}`).value.trim() || null])),
+      file_reference: fileReference,
+      file_date: document.getElementById("tool-file-date").value || null,
       updated_at: new Date().toISOString()
     };
-    const index = rows.findIndex((row) => row.id === item.id);
-    if (index >= 0) rows[index] = item;
-    else rows.unshift(item);
-    saveToolRows(TOOL_FOLDERS_KEY, rows);
-    toast("Pasta salva.");
-    openToolsModal("files");
+    try {
+      let saved;
+      if (isLive()) saved = id ? await updateRow("files", id, body) : await createRow("files", body);
+      else {
+        const localRows = toolFileRows();
+        saved = { id: current.id || crypto.randomUUID(), ...current, ...body, created_at: current.created_at || new Date().toISOString() };
+        const index = localRows.findIndex((row) => row.id === saved.id);
+        if (index >= 0) localRows[index] = saved; else localRows.unshift(saved);
+        saveToolRows(TOOL_FILES_KEY, localRows);
+      }
+      if (isLive()) {
+        const index = remoteToolFiles.findIndex((item) => item.id === saved.id);
+        if (index >= 0) remoteToolFiles[index] = saved; else remoteToolFiles.unshift(saved);
+        remoteToolFilesLoaded = true;
+        remoteToolFilesLoadedAt = Date.now();
+        saveToolsSessionCache("files", remoteToolFiles, remoteToolFilesLoadedAt);
+      }
+      toast("Arquivo salvo.");
+      closeToolFilePanel(closePanel);
+    } catch (err) {
+      button.disabled = false; button.textContent = "Salvar";
+      toast("Erro ao salvar arquivo · " + err.message, true);
+    }
   });
 }
 
-function deleteToolFolder(id) {
-  const rows = readToolRows(TOOL_FOLDERS_KEY);
-  const folder = rows.find((item) => item.id === id);
-  if (!folder || !window.confirm(`Excluir a pasta "${folder.name}"?`)) return;
-  saveToolRows(TOOL_FOLDERS_KEY, rows.filter((item) => item.id !== id));
-  renderToolsSection();
-  toast("Pasta excluída.");
+async function deleteToolFolder(id) {
+  if (!requireCurrentUserAdmin("Arquivos")) return;
+  const rows = toolFileRows();
+  const file = rows.find((item) => item.id === id);
+  if (!file || !window.confirm(`Excluir o arquivo "${file.file_reference}"?`)) return;
+  try {
+    if (isLive()) {
+      await deleteRow("files", id);
+      remoteToolFiles = remoteToolFiles.filter((item) => item.id !== id);
+      remoteToolFilesLoadedAt = Date.now();
+      saveToolsSessionCache("files", remoteToolFiles, remoteToolFilesLoadedAt);
+    } else saveToolRows(TOOL_FILES_KEY, rows.filter((item) => item.id !== id));
+    renderToolsSection();
+    toast("Arquivo excluído.");
+  } catch (err) { toast("Erro ao excluir arquivo · " + err.message, true); }
 }
 
 function normalizeProcessSteps(value) {
@@ -7035,7 +7171,10 @@ function toolFilterStrip(section, tableState, { loading = false, error = "" } = 
 
 function wireToolsLoadRetry(root, section = toolsState.section) {
   root.querySelector(".tool-load-retry")?.addEventListener("click", () => {
-    if (section === "emails") {
+    if (section === "files") {
+      remoteToolFilesError = "";
+      loadRemoteToolFiles({ force: true });
+    } else if (section === "emails") {
       remoteToolEmailsError = "";
       loadRemoteToolEmails({ force: true });
     } else if (section === "processes") {
